@@ -19,6 +19,21 @@ from occupancy_ratio.configs import (
     TransitionRatioConfig,
 )
 from occupancy_ratio.models import DiscountedOccupancyRatioModel
+from occupancy_ratio.kl_fori import (
+    KLFORIConfig,
+    KLFORIModel,
+    fit_kl_fori,
+    fit_kl_fori_boosting,
+    fit_kl_fori_neural,
+)
+from occupancy_ratio.clipped_kl_fori import (
+    ClippedKLFORIConvergenceError,
+    ClippedKLFORIConfig,
+    ClippedKLFORIModel,
+    fit_clipped_kl_fori,
+    fit_clipped_kl_fori_neural,
+)
+from occupancy_ratio.fit_occupancy_ratio import fit_regression_fori_lgbm
 from occupancy_ratio.boosted import (
     fit_discounted_occupancy_ratio,
     fit_occupancy_ratio_lgbm,
@@ -120,6 +135,17 @@ __all__ = [
     "TransitionRatioConfig",
     "OccupancyRegressionConfig",
     "DiscountedOccupancyRatioModel",
+    "KLFORIConfig",
+    "KLFORIModel",
+    "ClippedKLFORIConvergenceError",
+    "ClippedKLFORIConfig",
+    "ClippedKLFORIModel",
+    "fit_kl_fori",
+    "fit_kl_fori_boosting",
+    "fit_kl_fori_neural",
+    "fit_clipped_kl_fori",
+    "fit_clipped_kl_fori_neural",
+    "fit_regression_fori_lgbm",
     "fit_discounted_occupancy_ratio",
     "tune_discounted_occupancy_ratio_cv",
     "GoogleDualDICEConfig",

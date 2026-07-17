@@ -7,6 +7,7 @@ from occupancy_ratio.neural_configs import (
     NeuralTransitionRatioConfig,
 )
 from occupancy_ratio.neural_fit import (
+    fit_regression_fori_neural,
     fit_discounted_occupancy_ratio_neural,
     tune_discounted_occupancy_ratio_neural_cv,
 )
@@ -29,6 +30,7 @@ __all__ = [
     "fit_action_ratio_neural",
     "fit_source_state_ratio_neural",
     "fit_transition_ratio_neural",
+    "fit_regression_fori_neural",
     "fit_discounted_occupancy_ratio_neural",
     "tune_discounted_occupancy_ratio_neural_cv",
 ]
