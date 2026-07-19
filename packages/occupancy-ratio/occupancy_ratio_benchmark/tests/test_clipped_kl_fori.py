@@ -1475,16 +1475,16 @@ def test_benchmark_cli_smoke_and_backend_freeze_validation(tmp_path: Path) -> No
     )
     confirmatory = coverage_module.confirmatory_configs()
     sensitivities = coverage_module.sensitivity_configs()
-    assert len(confirmatory) == 7
+    assert len(confirmatory) == 3
     assert len(sensitivities) == 4
     assert sum(
         config.repetitions * len(config.mass_grid) * len(config.methods)
         for config in confirmatory
-    ) == 7_800
+    ) == 7_500
     assert sum(
         config.repetitions * len(config.mass_grid) * len(config.backends) * 2
         for config in confirmatory
-    ) == 5_600
+    ) == 5_000
     clipped_linear = {
         "clipped_gate_steps": 200,
         "clipped_ratio_steps": 300,
@@ -1493,10 +1493,6 @@ def test_benchmark_cli_smoke_and_backend_freeze_validation(tmp_path: Path) -> No
         "clipped_inner_relative_tolerance": 1e-10,
         "clipped_inner_gradient_tolerance": 1e-6,
         "clipped_inner_patience": 5,
-    }
-    clipped_neural = clipped_linear | {
-        "clipped_gate_learning_rate": 1e-3,
-        "clipped_ratio_learning_rate": 5e-4,
     }
     standard_linear = {
         "standard_num_iterations": 100,
@@ -1512,23 +1508,29 @@ def test_benchmark_cli_smoke_and_backend_freeze_validation(tmp_path: Path) -> No
         "oracle_used_for_selection": False,
         "optimizer_configs": {
             "clipped_linear": clipped_linear,
-            "clipped_neural": clipped_neural,
             "standard_linear": standard_linear,
         },
         "pilot_artifacts": {
             "clipped_linear": {"sha256": LINEAR_PILOT_SHA256},
             "standard_linear": {"sha256": "standard"},
-            "clipped_neural": {"sha256": "neural"},
+        },
+        "excluded_components": {
+            "contextual_neural_appendix": {
+                "audit_sha256": "neural-null-pilot"
+            }
+        },
+        "source_compatibility": {
+            "reproduction_critical_files_unchanged": True
         },
     }
     freeze_path = tmp_path / "freeze.json"
     freeze_path.write_text(json.dumps(valid))
     frozen = load_freeze_manifest(freeze_path, expected_revision="abc123")
     linear = apply_freeze(confirmatory[0], frozen)
-    neural = apply_freeze(confirmatory[-1], frozen)
     assert linear.clipped_ratio_learning_rate == pytest.approx(0.02)
     assert linear.standard_num_iterations == 100
-    assert neural.clipped_ratio_learning_rate == pytest.approx(5e-4)
+    with pytest.raises(ValueError, match="only linear"):
+        apply_freeze(replace(confirmatory[0], backends=("neural",)), frozen)
     freeze_path.write_text(
         json.dumps(valid | {"oracle_used_for_selection": True})
     )
@@ -1589,10 +1591,6 @@ def test_freeze_payload_records_exact_grids_and_truth_blind_pilots(
         "clipped_inner_gradient_tolerance": 1e-6,
         "clipped_inner_patience": 5,
     }
-    clipped_neural = clipped_linear | {
-        "clipped_gate_learning_rate": 1e-3,
-        "clipped_ratio_learning_rate": 5e-4,
-    }
     standard = {
         "standard_num_iterations": 100,
         "standard_optimizer_steps": 300,
@@ -1624,7 +1622,19 @@ def test_freeze_payload_records_exact_grids_and_truth_blind_pilots(
     linear = write_selection("linear-original.json", clipped_linear)
     verification = write_selection("linear-verification.json", clipped_linear)
     standard_path = write_selection("standard.json", standard)
-    neural = write_selection("neural.json", clipped_neural)
+    neural_audit = tmp_path / "neural-exclusion.json"
+    neural_audit.write_text(
+        json.dumps(
+            {
+                "schema": "clipped-neural-exclusion-v1",
+                "decision": "exclude_contextual_neural_appendix",
+                "reason": "three completed candidates failed the zero-failure gate",
+                "completed_candidates": 3,
+                "eligible_candidates": 0,
+                "oracle_used_for_selection": False,
+            }
+        )
+    )
 
     def fake_artifact(path):
         value = Path(path)
@@ -1644,13 +1654,14 @@ def test_freeze_payload_records_exact_grids_and_truth_blind_pilots(
         linear_selection_path=linear,
         linear_verification_path=verification,
         standard_selection_path=standard_path,
-        neural_selection_path=neural,
+        neural_exclusion_audit_path=neural_audit,
         reproduction_audit={"matched": True},
+        source_compatibility={"reproduction_critical_files_unchanged": True},
     )
     assert payload["oracle_used_for_selection"] is False
-    assert len(payload["grids"]["confirmatory"]) == 7
+    assert len(payload["grids"]["confirmatory"]) == 3
     assert len(payload["grids"]["sensitivity"]) == 4
-    assert payload["expected_counts"]["confirmatory_method_rows"] == 7_800
+    assert payload["expected_counts"]["confirmatory_method_rows"] == 7_500
     assert payload["optimizer_configs"]["standard_linear"] == standard
     with pytest.raises(ValueError, match="predictions"):
         freeze_cli.build_freeze_payload(
@@ -1659,8 +1670,9 @@ def test_freeze_payload_records_exact_grids_and_truth_blind_pilots(
             linear_selection_path=linear,
             linear_verification_path=verification,
             standard_selection_path=standard_path,
-            neural_selection_path=neural,
+            neural_exclusion_audit_path=neural_audit,
             reproduction_audit={"matched": False},
+            source_compatibility={"reproduction_critical_files_unchanged": True},
         )
 
 

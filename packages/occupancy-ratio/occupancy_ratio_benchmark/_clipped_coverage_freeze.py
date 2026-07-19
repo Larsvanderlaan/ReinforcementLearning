@@ -57,8 +57,9 @@ def load_freeze_manifest(
     optimizers = payload.get("optimizer_configs")
     if not isinstance(optimizers, dict):
         raise ValueError("freeze manifest has no optimizer configurations")
+    if set(optimizers) != {"clipped_linear", "standard_linear"}:
+        raise ValueError("freeze manifest has unexpected optimizer families")
     _validate_fields(optimizers.get("clipped_linear"), CLIPPED_FIELDS, "linear")
-    _validate_fields(optimizers.get("clipped_neural"), CLIPPED_FIELDS, "neural")
     _validate_fields(optimizers.get("standard_linear"), STANDARD_FIELDS, "standard")
     pilot_artifacts = payload.get("pilot_artifacts")
     if not isinstance(pilot_artifacts, dict):
@@ -66,6 +67,17 @@ def load_freeze_manifest(
     linear = pilot_artifacts.get("clipped_linear")
     if not isinstance(linear, dict) or linear.get("sha256") != LINEAR_PILOT_SHA256:
         raise ValueError("freeze manifest has the wrong clipped-linear pilot hash")
+    excluded = payload.get("excluded_components")
+    if not isinstance(excluded, dict) or "contextual_neural_appendix" not in excluded:
+        raise ValueError("freeze manifest must record the excluded neural appendix")
+    neural = excluded["contextual_neural_appendix"]
+    if not isinstance(neural, dict) or not neural.get("audit_sha256"):
+        raise ValueError("freeze manifest has no neural exclusion audit")
+    compatibility = payload.get("source_compatibility")
+    if not isinstance(compatibility, dict) or not bool(
+        compatibility.get("reproduction_critical_files_unchanged", False)
+    ):
+        raise ValueError("freeze manifest failed source-compatibility verification")
     return {
         **payload,
         "path": str(freeze_path),
@@ -81,6 +93,8 @@ def apply_freeze(
         raise ValueError("frozen coverage configs must contain one backend")
     backend = str(config.backends[0])
     optimizers = manifest["optimizer_configs"]
+    if backend != "linear":
+        raise ValueError("this frozen paper workload supports only linear backends")
     updates = dict(optimizers[f"clipped_{backend}"])
     if backend == "linear" and "standard_fori" in config.methods:
         updates.update(optimizers["standard_linear"])

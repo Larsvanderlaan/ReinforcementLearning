@@ -803,10 +803,9 @@ def _resolved_learning_rate(value: float | None, backend: str) -> float:
 
 
 def confirmatory_configs(*, seed: int = 12_000) -> list[CoverageRunConfig]:
-    """Return the frozen confirmatory workload specified by the manuscript plan."""
+    """Return the linear confirmatory workload after the neural pilot failed."""
     main_seed = 20_000_000 + int(seed)
-    contextual_seed = 30_000_000 + int(seed)
-    main = [
+    return [
         CoverageRunConfig(
             n=n,
             repetitions=repetitions,
@@ -817,20 +816,6 @@ def confirmatory_configs(*, seed: int = 12_000) -> list[CoverageRunConfig]:
         )
         for n, repetitions in ((2_000, 100), (10_000, 100), (50_000, 50))
     ]
-    contextual = [
-        CoverageRunConfig(
-            n=n,
-            repetitions=repetitions,
-            mass_grid=(0.0, 0.1, 0.5, 0.9, 1.0),
-            contexts=64,
-            backends=(backend,),
-            methods=("clipped_fori",),
-            seed=contextual_seed,
-        )
-        for n, repetitions in ((10_000, 20), (50_000, 10))
-        for backend in ("linear", "neural")
-    ]
-    return main + contextual
 
 
 def sensitivity_configs(*, seed: int = 22_000) -> list[CoverageRunConfig]:

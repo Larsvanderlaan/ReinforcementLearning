@@ -37,8 +37,10 @@ It does not contain confirmatory evidence or empirical manuscript claims.
 
 - Main linear shared-hub experiment: 2,500 dataset cells, 5,000 fold
   artifacts, and 7,500 method rows.
-- Contextual appendix: 300 backend-specific dataset cells, 600 fold artifacts,
-  and 300 clipped-method rows.
+- The optional contextual-neural appendix was removed after three completed
+  truth-blind pilot candidates had no zero-failure configuration. The fourth
+  screen candidate was stopped at 2/9 cells after the user approved removal.
+  Partial rows remain in the audit output and are not reclassified as successes.
 - Sensitivities: 540 dataset cells, 1,080 fold artifacts, and 1,140 method
   rows.
 - Confirmatory and sensitivity execution requires a clean checkout whose
@@ -48,7 +50,7 @@ It does not contain confirmatory evidence or empirical manuscript claims.
 
 - Ruff passes for the complete package source and tests.
 - All 107 clipped-estimator and clipped-coverage tests pass.
-- All 30 isolated standard KL-FORI core tests pass. Five copied tests for a
+- All 29 isolated standard KL-FORI core tests pass. Five copied tests for a
   separate dirty-tree package-wide benchmark/API migration are explicitly
   skipped to preserve this worktree's isolation; the existing package suite
   passes unchanged.
@@ -64,8 +66,8 @@ Do not launch confirmatory or sensitivity runs until:
 1. the historical clipped-linear pilot reproduces exactly on the committed
    clean code revision, including fold prediction and gate hashes;
 2. the truth-blind standard budget pilot selects a zero-failure budget;
-3. the contextual neural screen and three-restart final select a zero-failure,
-   stable candidate; and
+3. the neural exclusion audit is stored with the freeze without using oracle
+   accuracy fields; and
 4. the resulting `clipped-coverage-freeze-v1` manifest is committed outside
    the clean RLtools source worktree.
 
