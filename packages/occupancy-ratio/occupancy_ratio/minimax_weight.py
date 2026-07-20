@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import importlib
+import os
 from pathlib import Path
 import sys
 import time
@@ -135,6 +136,10 @@ class ScopeRLMinimaxWeightConfig:
         Optional upper cap applied to predicted weights.
     normalize_predictions:
         Whether to normalize predicted weights to mean one on each query block.
+    limit_torch_threads:
+        Whether to pin Torch/BLAS thread counts before importing SCOPE-RL. This
+        avoids native crashes observed in SCOPE-RL's Gaussian-kernel objective
+        on some macOS/PyTorch stacks.
     """
 
     scope_rl_repo_path: str | Path | None = None
@@ -144,11 +149,15 @@ class ScopeRLMinimaxWeightConfig:
     learning_rate: float = 1e-4
     hidden_dim: int = 100
     bandwidth: float = 1.0
+    bandwidth_selection: Literal["fixed", "median"] = "fixed"
+    bandwidth_num_pairs: int = 4096
+    standardize_inputs: bool = False
     regularization_weight: float = 1.0
     seed: int = 123
     device: str = "cpu"
     prediction_max: Optional[float] = None
     normalize_predictions: bool = False
+    limit_torch_threads: bool = True
 
     def __post_init__(self) -> None:
         if int(self.n_steps) <= 0:
@@ -163,6 +172,10 @@ class ScopeRLMinimaxWeightConfig:
             raise ValueError("hidden_dim must be positive.")
         if float(self.bandwidth) <= 0.0:
             raise ValueError("bandwidth must be positive.")
+        if self.bandwidth_selection not in {"fixed", "median"}:
+            raise ValueError("bandwidth_selection must be 'fixed' or 'median'.")
+        if int(self.bandwidth_num_pairs) <= 0:
+            raise ValueError("bandwidth_num_pairs must be positive.")
         if float(self.regularization_weight) < 0.0:
             raise ValueError("regularization_weight must be nonnegative.")
         if self.prediction_max is not None and float(self.prediction_max) <= 0.0:
@@ -292,16 +305,6 @@ class MinimaxWeightModel:
                 out["observed_action_ratio"],
             )
         return out
-
-    def to_legacy_dict(self) -> dict[str, Any]:
-        """Return a JSON-friendly wrapper around the fitted backend."""
-        return dict(
-            minimax_weight_model=self.backend_model,
-            method=str(self.method),
-            gamma=float(self.gamma),
-            diagnostics=dict(self.diagnostics),
-            config=self.config,
-        )
 
     def _validate_query(self, states: Array, actions: Array) -> tuple[Array, Array]:
         S = _as_2d(states, "states").astype(np.float32, copy=False)
@@ -570,7 +573,6 @@ def _fit_google_dice_rl(
     _ensure_dice_rl_importable(preflight.repo_path or dice_cfg.dice_rl_repo_path)
     import tensorflow as tf  # noqa: PLC0415
     from tf_agents.specs import tensor_spec  # noqa: PLC0415
-    from tf_agents.trajectories import policy_step  # noqa: PLC0415
     from dice_rl.data import dataset as dice_dataset  # noqa: PLC0415
     from dice_rl.estimators.neural_dice import NeuralDice  # noqa: PLC0415
     from dice_rl.networks.value_network import ValueNetwork  # noqa: PLC0415
@@ -587,7 +589,6 @@ def _fit_google_dice_rl(
     S = common["S"]
     A = common["A"]
     S_next = common["S_next"]
-    A_pi = common["A_pi"]
     A_pi_next = common["A_pi_next"]
     S_initial = common["S_initial"]
     A_initial = common["A_initial"]
@@ -626,13 +627,14 @@ def _fit_google_dice_rl(
         last_kernel_initializer=tf.keras.initializers.GlorotUniform(seed=int(dice_cfg.seed + 3_003)),
     )
     optimizer_kwargs = {"learning_rate": float(dice_cfg.learning_rate), "clipvalue": 1.0}
-    estimator = NeuralDice(
+    DirectActionNeuralDice = _direct_action_neural_dice_class(NeuralDice)
+    estimator = DirectActionNeuralDice(
         step_spec,
         nu_network,
         zeta_network,
-        tf.keras.optimizers.Adam(**optimizer_kwargs),
-        tf.keras.optimizers.Adam(**optimizer_kwargs),
-        tf.keras.optimizers.Adam(**optimizer_kwargs),
+        _dice_rl_adam_optimizer(tf, **optimizer_kwargs),
+        _dice_rl_adam_optimizer(tf, **optimizer_kwargs),
+        _dice_rl_adam_optimizer(tf, **optimizer_kwargs),
         float(common["gamma"]),
         zero_reward=bool(flags["zero_reward"]),
         f_exponent=2.0,
@@ -640,13 +642,6 @@ def _fit_google_dice_rl(
         dual_regularizer=float(flags["dual_regularizer"]),
         norm_regularizer=float(flags["norm_regularizer"]),
     )
-    target_policy = _NearestActionPolicy(
-        tf=tf,
-        policy_step=policy_step,
-        states=np.vstack([S, S_next, S_initial]).astype(np.float32, copy=False),
-        actions=np.vstack([A_pi, A_pi_next, A_initial]).astype(np.float32, copy=False),
-    )
-
     states_tf = tf.convert_to_tensor(S, dtype=tf.float32)
     actions_tf = tf.convert_to_tensor(A, dtype=tf.float32)
     next_states_tf = tf.convert_to_tensor(S_next, dtype=tf.float32)
@@ -660,12 +655,11 @@ def _fit_google_dice_rl(
     row_probs = _probabilities(common["sample_weight"])
     init_probs = _probabilities(common["initial_weight"])
     actual_batch_size = min(int(dice_cfg.batch_size), S.shape[0])
-    initial_batch_size = min(actual_batch_size, S_initial.shape[0])
     losses: list[tuple[float, float, float]] = []
     start = time.perf_counter()
     for step in range(int(dice_cfg.num_steps)):
         idx = rng.choice(S.shape[0], size=actual_batch_size, replace=True, p=row_probs)
-        init_idx = rng.choice(S_initial.shape[0], size=initial_batch_size, replace=True, p=init_probs)
+        init_idx = rng.choice(S_initial.shape[0], size=actual_batch_size, replace=True, p=init_probs)
         experience = _dice_rl_experience_batch(
             dice_dataset,
             tf,
@@ -682,7 +676,7 @@ def _fit_google_dice_rl(
             states=tf.gather(initial_states_tf, init_idx),
             actions=tf.gather(initial_actions_tf, init_idx),
         )
-        loss_tuple = estimator.train_step(initial_step, experience, target_policy)
+        loss_tuple = estimator.train_step(initial_step, experience, None)
         if step == 0 or step == int(dice_cfg.num_steps) - 1 or (step + 1) % 250 == 0:
             losses.append(tuple(float(value.numpy()) for value in loss_tuple))
 
@@ -700,11 +694,14 @@ def _fit_google_dice_rl(
     extra: dict[str, Any] = {
         "num_steps": float(dice_cfg.num_steps),
         "batch_size": float(actual_batch_size),
+        "initial_batch_size": float(actual_batch_size),
         "learning_rate": float(dice_cfg.learning_rate),
         "hidden_dims": "x".join(str(width) for width in hidden_dims),
         "runtime_sec": float(time.perf_counter() - start),
         "exact_dualdice_flags": float(_flags_match(flags, GOOGLE_DICE_RL_DUALDICE_EXACT_FLAGS)),
         "recommended_flags": float(_flags_match(flags, GOOGLE_DICE_RL_RECOMMENDED_FLAGS)),
+        "direct_action_target_policy": 1.0,
+        "target_policy_lookup_reference_rows": 0.0,
     }
     for key, value in flags.items():
         extra[key] = float(value)
@@ -735,6 +732,30 @@ def _fit_google_dice_rl(
     )
 
 
+def _maybe_limit_scope_rl_torch_threads(enabled: bool) -> bool:
+    if not enabled:
+        return False
+    os.environ.setdefault("OMP_NUM_THREADS", "1")
+    os.environ.setdefault("MKL_NUM_THREADS", "1")
+    os.environ.setdefault("VECLIB_MAXIMUM_THREADS", "1")
+    os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
+    try:
+        import torch  # noqa: PLC0415
+    except Exception:
+        return False
+    try:
+        torch.set_num_threads(1)
+    except Exception:
+        return False
+    try:
+        torch.set_num_interop_threads(1)
+    except RuntimeError:
+        pass
+    except Exception:
+        pass
+    return True
+
+
 def _fit_scope_rl_minimax_weight(
     common: dict[str, Any],
     cfg: MinimaxWeightConfig,
@@ -750,6 +771,7 @@ def _fit_scope_rl_minimax_weight(
     if not preflight.available:
         raise ModuleNotFoundError(preflight.reason)
     _ensure_scope_rl_importable(None if scope_cfg.scope_rl_repo_path is None else Path(scope_cfg.scope_rl_repo_path))
+    torch_threads_limited = _maybe_limit_scope_rl_torch_threads(bool(scope_cfg.limit_torch_threads))
     from scope_rl.ope.weight_value_learning import (  # noqa: PLC0415
         ContinuousMinimaxStateActionWeightLearning,
         ContinuousMinimaxStateWeightLearning,
@@ -762,13 +784,40 @@ def _fit_scope_rl_minimax_weight(
     S = common["S"]
     A = common["A"]
     A_pi = common["A_pi"]
-    fit_rows = _prepare_scope_rl_trajectory_rows(
-        states=S,
-        actions=A,
-        target_actions=A_pi,
-        episode_ids=episode_ids,
-        timesteps=timesteps,
-        step_per_trajectory=step_per_trajectory,
+    scope_common, state_center, state_scale, action_center, action_scale = _scope_rl_preprocess_inputs(
+        common,
+        standardize=bool(scope_cfg.standardize_inputs),
+    )
+    scope_bandwidth = _scope_rl_bandwidth(
+        scope_common["S"],
+        scope_common["A"],
+        configured=float(scope_cfg.bandwidth),
+        selection=str(scope_cfg.bandwidth_selection),
+        num_pairs=int(scope_cfg.bandwidth_num_pairs),
+        seed=int(scope_cfg.seed),
+    )
+    S_fit = scope_common["S"]
+    A_fit = scope_common["A"]
+    A_pi_fit = scope_common["A_pi"]
+    iid_transition_fit = method == "scope_rl_minimax_state_action" and step_per_trajectory == 1
+    fit_rows = (
+        {
+            "states": S_fit,
+            "actions": A_fit,
+            "target_actions": A_pi_fit,
+            "row_index": np.arange(S_fit.shape[0], dtype=np.int64),
+            "step_per_trajectory": 1,
+            "inferred_single_trajectory": False,
+        }
+        if iid_transition_fit
+        else _prepare_scope_rl_trajectory_rows(
+            states=S_fit,
+            actions=A_fit,
+            target_actions=A_pi_fit,
+            episode_ids=episode_ids,
+            timesteps=timesteps,
+            step_per_trajectory=step_per_trajectory,
+        )
     )
     start = time.perf_counter()
     if method == "scope_rl_minimax_state_action":
@@ -780,23 +829,38 @@ def _fit_scope_rl_minimax_weight(
         learner = ContinuousMinimaxStateActionWeightLearning(
             w_function=weight_function,
             gamma=float(common["gamma"]),
-            bandwidth=float(scope_cfg.bandwidth),
+            bandwidth=float(scope_bandwidth),
             batch_size=int(scope_cfg.batch_size),
             lr=float(scope_cfg.learning_rate),
             device=str(scope_cfg.device),
         )
-        learner.fit(
-            step_per_trajectory=int(fit_rows["step_per_trajectory"]),
-            state=fit_rows["states"],
-            action=fit_rows["actions"],
-            evaluation_policy_action=fit_rows["target_actions"],
-            n_steps=int(scope_cfg.n_steps),
-            n_steps_per_epoch=int(scope_cfg.n_steps_per_epoch),
-            regularization_weight=float(scope_cfg.regularization_weight),
-            random_state=int(scope_cfg.seed),
-        )
+        if iid_transition_fit:
+            objective_final, normalization_final = _fit_scope_rl_iid_state_action(
+                learner,
+                common=scope_common,
+                n_steps=int(scope_cfg.n_steps),
+                batch_size=int(scope_cfg.batch_size),
+                learning_rate=float(scope_cfg.learning_rate),
+                regularization_weight=float(scope_cfg.regularization_weight),
+                seed=int(scope_cfg.seed),
+                device=str(scope_cfg.device),
+            )
+        else:
+            learner.fit(
+                step_per_trajectory=int(fit_rows["step_per_trajectory"]),
+                state=fit_rows["states"],
+                action=fit_rows["actions"],
+                evaluation_policy_action=fit_rows["target_actions"],
+                n_steps=int(scope_cfg.n_steps),
+                n_steps_per_epoch=int(scope_cfg.n_steps_per_epoch),
+                regularization_weight=float(scope_cfg.regularization_weight),
+                random_state=int(scope_cfg.seed),
+            )
+            objective_final = normalization_final = float("nan")
 
         def predict_scope_state_action(states_query: Array, actions_query: Array) -> Array:
+            states_query = _apply_scope_standardization(states_query, state_center, state_scale)
+            actions_query = _apply_scope_standardization(actions_query, action_center, action_scale)
             if hasattr(learner, "predict_weight"):
                 return learner.predict_weight(states_query, actions_query)
             return learner.predict(states_query, actions_query)
@@ -816,7 +880,7 @@ def _fit_scope_rl_minimax_weight(
         learner = ContinuousMinimaxStateWeightLearning(
             w_function=weight_function,
             gamma=float(common["gamma"]),
-            bandwidth=float(scope_cfg.bandwidth),
+            bandwidth=float(scope_bandwidth),
             batch_size=int(scope_cfg.batch_size),
             lr=float(scope_cfg.learning_rate),
             device=str(scope_cfg.device),
@@ -834,6 +898,7 @@ def _fit_scope_rl_minimax_weight(
         )
 
         def predict_scope_state(states_query: Array) -> Array:
+            states_query = _apply_scope_standardization(states_query, state_center, state_scale)
             if hasattr(learner, "predict_state_marginal_importance_weight"):
                 return learner.predict_state_marginal_importance_weight(states_query)
             if hasattr(learner, "predict_weight"):
@@ -871,14 +936,25 @@ def _fit_scope_rl_minimax_weight(
         "batch_size": float(scope_cfg.batch_size),
         "learning_rate": float(scope_cfg.learning_rate),
         "hidden_dim": float(scope_cfg.hidden_dim),
-        "bandwidth": float(scope_cfg.bandwidth),
+        "bandwidth": float(scope_bandwidth),
+        "bandwidth_configured": float(scope_cfg.bandwidth),
+        "bandwidth_selection": str(scope_cfg.bandwidth_selection),
+        "bandwidth_num_pairs": float(scope_cfg.bandwidth_num_pairs),
+        "standardize_inputs": bool(scope_cfg.standardize_inputs),
         "regularization_weight": float(scope_cfg.regularization_weight),
         "device": str(scope_cfg.device),
+        "limit_torch_threads": bool(scope_cfg.limit_torch_threads),
+        "torch_threads_limited": bool(torch_threads_limited),
         "runtime_sec": float(time.perf_counter() - start),
         "step_per_trajectory": float(fit_rows["step_per_trajectory"]),
         "trajectory_rows_used": float(fit_rows["states"].shape[0]),
         "trajectory_rows_dropped": float(S.shape[0] - fit_rows["states"].shape[0]),
         "trajectory_inferred_single": bool(fit_rows["inferred_single_trajectory"]),
+        "iid_transition_fit": bool(iid_transition_fit),
+        "evaluation_policy_actions_used": bool(iid_transition_fit),
+        "normalization_penalty_sign_corrected": bool(iid_transition_fit),
+        "objective_final": float(objective_final),
+        "normalization_loss_final": float(normalization_final),
     }
     diagnostics = _prefixed_backend_diagnostics(
         method=method,
@@ -902,6 +978,110 @@ def _fit_scope_rl_minimax_weight(
         prediction_max=scope_cfg.prediction_max,
         normalize_predictions=bool(scope_cfg.normalize_predictions),
     )
+
+
+def _scope_rl_preprocess_inputs(
+    common: dict[str, Any],
+    *,
+    standardize: bool,
+) -> tuple[dict[str, Any], Array, Array, Array, Array]:
+    state_center = np.zeros(common["S"].shape[1], dtype=np.float32)
+    state_scale = np.ones(common["S"].shape[1], dtype=np.float32)
+    action_center = np.zeros(common["A"].shape[1], dtype=np.float32)
+    action_scale = np.ones(common["A"].shape[1], dtype=np.float32)
+    if standardize:
+        state_center = np.mean(common["S"], axis=0, dtype=np.float64).astype(np.float32)
+        state_scale = np.std(common["S"], axis=0, dtype=np.float64).astype(np.float32)
+        action_center = np.mean(common["A"], axis=0, dtype=np.float64).astype(np.float32)
+        action_scale = np.std(common["A"], axis=0, dtype=np.float64).astype(np.float32)
+        state_scale = np.where(state_scale > 1e-6, state_scale, 1.0).astype(np.float32)
+        action_scale = np.where(action_scale > 1e-6, action_scale, 1.0).astype(np.float32)
+
+    transformed = dict(common)
+    for key in ("S", "S_next", "S_initial"):
+        transformed[key] = _apply_scope_standardization(common[key], state_center, state_scale)
+    for key in ("A", "A_pi", "A_pi_next", "A_initial"):
+        transformed[key] = _apply_scope_standardization(common[key], action_center, action_scale)
+    return transformed, state_center, state_scale, action_center, action_scale
+
+
+def _apply_scope_standardization(values: Array, center: Array, scale: Array) -> Array:
+    out = (np.asarray(values, dtype=np.float32) - center) / scale
+    return np.asarray(out, dtype=np.float32)
+
+
+def _scope_rl_bandwidth(
+    states: Array,
+    actions: Array,
+    *,
+    configured: float,
+    selection: str,
+    num_pairs: int,
+    seed: int,
+) -> float:
+    if selection == "fixed":
+        return float(configured)
+    features = np.concatenate(
+        [np.asarray(states, dtype=np.float64), np.asarray(actions, dtype=np.float64)],
+        axis=1,
+    )
+    rng = np.random.default_rng(int(seed) + 91_337)
+    left = rng.integers(0, features.shape[0], size=int(num_pairs))
+    right = rng.integers(0, features.shape[0], size=int(num_pairs))
+    distance = np.linalg.norm(features[left] - features[right], axis=1)
+    positive = distance[np.isfinite(distance) & (distance > 1e-8)]
+    if positive.size == 0:
+        return float(configured)
+    return max(float(np.median(positive)), 1e-6)
+
+
+def _fit_scope_rl_iid_state_action(
+    learner: Any,
+    *,
+    common: dict[str, Any],
+    n_steps: int,
+    batch_size: int,
+    learning_rate: float,
+    regularization_weight: float,
+    seed: int,
+    device: str,
+) -> tuple[float, float]:
+    """Fit SCOPE-RL's MWL objective on independent transition rows."""
+
+    import torch  # noqa: PLC0415
+    from torch.nn.utils import clip_grad_norm_  # noqa: PLC0415
+
+    torch.manual_seed(int(seed))
+    state = torch.as_tensor(common["S"], dtype=torch.float32, device=device)
+    action = torch.as_tensor(common["A"], dtype=torch.float32, device=device)
+    next_state = torch.as_tensor(common["S_next"], dtype=torch.float32, device=device)
+    next_action = torch.as_tensor(common["A_pi_next"], dtype=torch.float32, device=device)
+    initial_state = torch.as_tensor(common["S_initial"], dtype=torch.float32, device=device)
+    initial_action = torch.as_tensor(common["A_initial"], dtype=torch.float32, device=device)
+    optimizer = torch.optim.Adam(learner.w_function.parameters(), lr=float(learning_rate))
+    actual_batch = min(int(batch_size), state.shape[0])
+    initial_batch = min(int(batch_size), initial_state.shape[0])
+    objective_loss = normalization_loss = torch.tensor(float("nan"), device=device)
+    for _ in range(int(n_steps)):
+        row_idx = torch.randint(state.shape[0], size=(actual_batch,), device=device)
+        initial_idx = torch.randint(initial_state.shape[0], size=(initial_batch,), device=device)
+        pair_batch = min(actual_batch, initial_batch)
+        row_idx = row_idx[:pair_batch]
+        initial_idx = initial_idx[:pair_batch]
+        objective_loss, normalization_loss = learner._objective_function(
+            initial_state=initial_state[initial_idx],
+            initial_action=initial_action[initial_idx],
+            state=state[row_idx],
+            action=action[row_idx],
+            next_state=next_state[row_idx],
+            next_action=next_action[row_idx],
+        )
+        loss = objective_loss + float(regularization_weight) * normalization_loss
+        optimizer.zero_grad()
+        loss.backward()
+        clip_grad_norm_(learner.w_function.parameters(), max_norm=0.01)
+        optimizer.step()
+    return float(objective_loss.detach().cpu()), float(normalization_loss.detach().cpu())
 
 
 def _prepare_common_inputs(
@@ -1100,18 +1280,27 @@ def _ensure_scope_rl_importable(repo_path: Path | None) -> None:
     importlib.import_module("scope_rl")
 
 
-class _NearestActionPolicy:
-    def __init__(self, *, tf, policy_step, states: Array, actions: Array) -> None:
-        self._tf = tf
-        self._policy_step = policy_step
-        self._states = tf.convert_to_tensor(_as_float32_2d(states), dtype=tf.float32)
-        self._actions = tf.convert_to_tensor(_as_float32_2d(actions), dtype=tf.float32)
+def _direct_action_neural_dice_class(neural_dice_cls):  # noqa: ANN001
+    """Build NeuralDice that consumes target actions stored on each row.
 
-    def action(self, time_step):  # noqa: ANN001
-        obs = self._tf.reshape(self._tf.cast(time_step.observation, self._tf.float32), [self._tf.shape(time_step.observation)[0], -1])
-        squared_dist = self._tf.reduce_sum(self._tf.square(obs[:, None, :] - self._states[None, :, :]), axis=-1)
-        idx = self._tf.argmin(squared_dist, axis=1, output_type=self._tf.int32)
-        return self._policy_step.PolicyStep(action=self._tf.gather(self._actions, idx), state=(), info=())
+    NeuralDice normally calls a policy for initial and successor observations.
+    The benchmark has already sampled those actions and stores them in the
+    corresponding ``EnvStep``. Reusing them is the same one-action Monte Carlo
+    objective without a nearest-neighbor policy lookup.
+    """
+
+    class DirectActionNeuralDice(neural_dice_cls):
+        def _get_average_value(self, network, env_step, policy):  # noqa: ANN001
+            del policy
+            return self._get_value(network, env_step)
+
+    DirectActionNeuralDice.__name__ = "DirectActionNeuralDice"
+    return DirectActionNeuralDice
+
+
+def _dice_rl_adam_optimizer(tf, **kwargs):  # noqa: ANN001
+    legacy = getattr(getattr(tf.keras.optimizers, "legacy", None), "Adam", None)
+    return legacy(**kwargs) if legacy is not None else tf.keras.optimizers.Adam(**kwargs)
 
 
 def _as_float32_2d(values: Array) -> Array:

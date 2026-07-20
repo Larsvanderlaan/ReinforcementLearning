@@ -202,6 +202,10 @@ def make_discrete_dataset(
     initial_actions_i = sample_policy_actions(mdp.target_policy, initial_states_i, rng)
 
     ratio_table = exact_ratio_table(mdp, gamma)
+    target_state_occupancy = exact_discounted_state_occupancy(mdp, gamma)
+    target_policy_value = float(
+        np.sum(target_state_occupancy[:, None] * mdp.target_policy * mdp.rewards)
+    )
     row_idx = state_action_indices(states_i, actions_i, mdp.n_actions)
     true_ratio = ratio_table.reshape(-1)[row_idx]
     true_action_ratio = (
@@ -242,6 +246,9 @@ def make_discrete_dataset(
         gamma=float(gamma),
         seed=int(seed),
         sample_size=int(sample_size),
+        target_policy_value=target_policy_value,
+        target_policy_value_se=0.0,
+        target_policy_value_kind="exact_normalized_discounted_step_reward",
         metadata=metadata,
     )
 

@@ -40,7 +40,7 @@ class GaussianPolicy:
         gain = np.asarray(self.gain, dtype=np.float64).reshape(1, 2)
         mean_a = (gain @ mean_s).reshape(1)
         cross = cov_s @ gain.T
-        var_a = float(gain @ cov_s @ gain.T + float(self.action_sd) ** 2)
+        var_a = float((gain @ cov_s @ gain.T).item() + float(self.action_sd) ** 2)
         return (
             np.concatenate([mean_s, mean_a], axis=0),
             np.block([[cov_s, cross], [cross.T, np.array([[var_a]], dtype=np.float64)]]),
@@ -215,6 +215,18 @@ def make_linear_gaussian_dataset(
     true_action_ratio = np.exp(system.target_policy.logpdf(states, actions) - system.behavior_policy.logpdf(states, actions))
     true_transition_ratio = np.exp(system.transition_logpdf(states, actions, next_states) - _state_logpdf(system, next_states))
     rewards = -np.sum(states**2, axis=1) - 0.2 * np.sum(actions**2, axis=1)
+    target_policy_value = 0.0
+    for mixture_weight, mean, covariance in zip(
+        target_mix.weights,
+        target_mix.means,
+        target_mix.covariances,
+        strict=True,
+    ):
+        state_second_moment = float(np.sum(mean[:2] ** 2) + np.trace(covariance[:2, :2]))
+        action_second_moment = float(mean[2] ** 2 + covariance[2, 2])
+        target_policy_value -= float(mixture_weight) * (
+            state_second_moment + 0.2 * action_second_moment
+        )
 
     return BenchmarkDataset(
         setting="linear_gaussian",
@@ -234,6 +246,9 @@ def make_linear_gaussian_dataset(
         gamma=float(gamma),
         seed=int(seed),
         sample_size=int(sample_size),
+        target_policy_value=float(target_policy_value),
+        target_policy_value_se=0.0,
+        target_policy_value_kind="analytic_normalized_discounted_step_reward",
         metadata={
             "truth_source": "analytic_linear_gaussian_mixture",
             "reference_distribution": "initial_state_gaussian",

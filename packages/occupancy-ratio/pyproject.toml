@@ -33,6 +33,8 @@ occupancy-ratio-moment-evaluator-ablation = "occupancy_ratio_benchmark.moment_ev
 occupancy-ratio-clipped-coverage = "occupancy_ratio_benchmark.clipped_coverage:main"
 occupancy-ratio-clipped-coverage-merge = "occupancy_ratio_benchmark.clipped_coverage_merge:main"
 occupancy-ratio-clipped-coverage-freeze = "occupancy_ratio_benchmark.clipped_coverage_freeze:main"
+occupancy-ratio-calibration = "occupancy_ratio_benchmark.calibration_run:main"
+occupancy-ratio-calibration-report = "occupancy_ratio_benchmark.calibration_reporting:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

@@ -33,6 +33,12 @@ from occupancy_ratio.clipped_kl_fori import (
     fit_clipped_kl_fori,
     fit_clipped_kl_fori_neural,
 )
+from occupancy_ratio.isotonic_calibration import (
+    IsotonicCalibrationConfig,
+    IsotonicCalibrationResult,
+    fit_isotonic_fori_pava,
+    fit_isotonic_fori_pava_weights,
+)
 from occupancy_ratio.fit_occupancy_ratio import fit_regression_fori_lgbm
 from occupancy_ratio.boosted import (
     fit_discounted_occupancy_ratio,
@@ -145,6 +151,10 @@ __all__ = [
     "fit_kl_fori_neural",
     "fit_clipped_kl_fori",
     "fit_clipped_kl_fori_neural",
+    "IsotonicCalibrationConfig",
+    "IsotonicCalibrationResult",
+    "fit_isotonic_fori_pava",
+    "fit_isotonic_fori_pava_weights",
     "fit_regression_fori_lgbm",
     "fit_discounted_occupancy_ratio",
     "tune_discounted_occupancy_ratio_cv",
