@@ -1,0 +1,23 @@
+{
+  "n_train": 2000,
+  "n_test": 20000,
+  "repetitions": 1,
+  "gamma": 0.95,
+  "contexts": 8,
+  "behavior_probability": 0.25,
+  "support_fractions": [0.5],
+  "failure_modes": ["initial", "successor"],
+  "backends": ["neural"],
+  "methods": ["stopped_fori_learned_gate"],
+  "tau_lower": 1e-6,
+  "tau_upper": 20.0,
+  "seed": 183000,
+  "stopped_num_iterations": 120,
+  "stopped_gate_steps": 50,
+  "stopped_ratio_steps": 50,
+  "stopped_hidden_dims": [64, 64],
+  "standard_num_iterations": 60,
+  "standard_optimizer_steps": 50,
+  "validation_fraction": 0.0,
+  "device": "cpu"
+}
