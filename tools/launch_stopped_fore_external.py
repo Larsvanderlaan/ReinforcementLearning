@@ -47,6 +47,12 @@ def supervise(
     repository = Path(__file__).resolve().parents[1]
     package_root = repository / "packages" / "occupancy-ratio"
     output_root.mkdir(parents=True, exist_ok=True)
+    # Longest-processing-time first keeps late long shards off the critical path.
+    ordered_configs = sorted(
+        configs,
+        key=lambda item: _configured_training_size(item[1]),
+        reverse=True,
+    )
     jobs = [
         ShardJob(
             label=label,
@@ -55,8 +61,8 @@ def supervise(
             shard_index=shard_index,
             num_shards=num_shards,
         )
+        for label, config in ordered_configs
         for shard_index in range(num_shards)
-        for label, config in configs
     ]
     pending = list(jobs)
     running: dict[str, ShardJob] = {}
@@ -231,6 +237,11 @@ def _worker_environment(package_root: Path) -> dict[str, str]:
         }
     )
     return environment
+
+
+def _configured_training_size(config: Path) -> int:
+    payload = json.loads(config.read_text())
+    return int(payload.get("n_train", 0))
 
 
 def _write_status(
