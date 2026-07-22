@@ -176,3 +176,22 @@ def test_end_to_end_smoke_writes_external_artifacts(tmp_path) -> None:
     assert manifest["crossfit_folds"] == 0
     assert manifest["calibration_method"] == "none"
     assert manifest["completed_cells"] == 1
+
+
+def test_repository_metadata_runs_git_from_a_directory(monkeypatch) -> None:
+    import occupancy_ratio_benchmark.stopped_fore_external as benchmark
+
+    working_directories = []
+
+    def fake_check_output(command, *, cwd, text):
+        assert text is True
+        assert cwd.is_dir()
+        working_directories.append(cwd)
+        return "abc123\n" if command[1:3] == ["rev-parse", "HEAD"] else ""
+
+    monkeypatch.setattr(benchmark.subprocess, "check_output", fake_check_output)
+
+    metadata = benchmark._repository_metadata()
+
+    assert metadata == {"commit": "abc123", "dirty": False, "status": []}
+    assert len(working_directories) == 2

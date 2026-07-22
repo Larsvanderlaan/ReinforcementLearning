@@ -383,7 +383,7 @@ def _write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
 
 
 def _repository_metadata() -> dict[str, Any]:
-    root = Path(__file__).resolve()
+    root = Path(__file__).resolve().parent
     try:
         commit = subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=root, text=True
