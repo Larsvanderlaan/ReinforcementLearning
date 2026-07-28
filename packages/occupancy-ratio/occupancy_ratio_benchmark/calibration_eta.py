@@ -27,11 +27,16 @@ def build_eta_gate(
     ceiling_hours: float = 84.0,
     contingency_fraction: float = 0.10,
     expected_full_fold_units: int = 24_000,
+    expected_full_data_fit_units: int | None = None,
+    full_data_fit_runtime_multiplier: float = 1.25,
 ) -> dict[str, Any]:
     """Project the full suite from p95 pilot costs by track/estimator/size.
 
     Pilot truth or endpoint values are never consumed.  Failed or missing
-    runtime strata close the gate instead of being silently dropped.
+    runtime strata close the gate instead of being silently dropped.  Each
+    learned aggregation also fits one full-data raw comparator.  Its cost is
+    charged at a conservative multiple of the matching fold-fit p95 because a
+    full-data fit uses more observations than one cross-fit training fold.
     """
 
     concurrency = int(maximum_concurrency)
@@ -43,15 +48,25 @@ def build_eta_gate(
         raise ValueError("ceiling_hours must be positive and finite")
     if not np.isfinite(contingency) or contingency < 0.0:
         raise ValueError("contingency_fraction must be nonnegative and finite")
+    full_data_multiplier = float(full_data_fit_runtime_multiplier)
+    if not np.isfinite(full_data_multiplier) or full_data_multiplier < 1.0:
+        raise ValueError("full_data_fit_runtime_multiplier must be at least one")
 
     full_rows = _full_fold_rows(confirmatory_manifests)
+    full_data_rows = _full_data_fit_rows(confirmatory_manifests)
     full_total = len(full_rows)
+    full_data_total = len(full_data_rows)
     size_limits = _size_limits(full_rows)
     full_counts: dict[tuple[str, str, str], int] = defaultdict(int)
     for row in full_rows:
         track = _track(str(row["benchmark_family"]))
         band = _size_band(int(row["sample_size"]), size_limits[track])
         full_counts[(track, str(row["estimator_id"]), band)] += 1
+    full_data_counts: dict[tuple[str, str, str], int] = defaultdict(int)
+    for row in full_data_rows:
+        track = _track(str(row["benchmark_family"]))
+        band = _size_band(int(row["sample_size"]), size_limits[track])
+        full_data_counts[(track, str(row["estimator_id"]), band)] += 1
 
     pilot_runtime: dict[tuple[str, str, str], list[float]] = defaultdict(list)
     failed_pilot_rows = 0
@@ -93,7 +108,10 @@ def build_eta_gate(
             continue
         p50 = float(np.quantile(runtimes, 0.50))
         p95 = float(np.quantile(runtimes, 0.95))
-        projected = count * p95
+        full_data_count = int(full_data_counts.get(key, 0))
+        projected_fold = count * p95
+        projected_full_data = full_data_count * p95 * full_data_multiplier
+        projected = projected_fold + projected_full_data
         serial_seconds += projected
         strata.append(
             {
@@ -105,6 +123,12 @@ def build_eta_gate(
                 "pilot_p50_sec": p50,
                 "pilot_p95_sec": p95,
                 "full_fold_units": count,
+                "full_data_fit_units": full_data_count,
+                "full_data_fit_runtime_multiplier": full_data_multiplier,
+                "projected_fold_serial_hours": projected_fold / 3600.0,
+                "projected_full_data_fit_serial_hours": (
+                    projected_full_data / 3600.0
+                ),
                 "projected_serial_hours": projected / 3600.0,
             }
         )
@@ -176,6 +200,14 @@ def build_eta_gate(
         reasons.append(
             f"full learned-fold count is {full_total}, expected {int(expected_full_fold_units)}"
         )
+    if (
+        expected_full_data_fit_units is not None
+        and full_data_total != int(expected_full_data_fit_units)
+    ):
+        reasons.append(
+            "full-data raw-fit count is "
+            f"{full_data_total}, expected {int(expected_full_data_fit_units)}"
+        )
     if missing:
         reasons.append(f"{len(missing)} required pilot runtime strata are missing")
     if failed_pilot_rows:
@@ -200,6 +232,13 @@ def build_eta_gate(
         "ceiling_hours": ceiling,
         "full_learned_fold_units": full_total,
         "expected_full_learned_fold_units": int(expected_full_fold_units),
+        "full_data_fit_units": full_data_total,
+        "expected_full_data_fit_units": (
+            None
+            if expected_full_data_fit_units is None
+            else int(expected_full_data_fit_units)
+        ),
+        "full_data_fit_runtime_multiplier": full_data_multiplier,
         "pilot_ok_runtime_rows": int(sum(len(values) for values in pilot_runtime.values())),
         "pilot_failed_rows": failed_pilot_rows,
         "pilot_invalid_rows": invalid_pilot_rows,
@@ -214,6 +253,36 @@ def build_eta_gate(
         "dataset_strata": dataset_strata,
         "blocking_reasons": reasons,
     }
+
+
+def _full_data_fit_rows(
+    manifests: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    rows = []
+    for manifest in manifests:
+        units = manifest.get("aggregation_units")
+        if units is None:
+            continue
+        if not isinstance(units, list):
+            raise ValueError("confirmatory manifest has invalid aggregation_units")
+        for unit in units:
+            operation = unit.get("operation", {})
+            if not bool(operation.get("base_fit_required", False)):
+                continue
+            identity = unit.get("identity", {})
+            axes = identity.get("axis_values", {})
+            cell = unit.get("cell", {})
+            try:
+                rows.append(
+                    {
+                        "benchmark_family": str(cell["benchmark_family"]),
+                        "estimator_id": str(identity["estimator_id"]),
+                        "sample_size": int(axes["sample_size"]),
+                    }
+                )
+            except (KeyError, TypeError, ValueError) as error:
+                raise ValueError("invalid confirmatory aggregation unit") from error
+    return rows
 
 
 def _full_fold_rows(manifests: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:

@@ -662,6 +662,8 @@ def _validate_launch_gate(
         raise ValueError("confirmatory ETA gate is not passing")
     if payload.get("full_learned_fold_units") != 24_000:
         raise ValueError("ETA gate does not cover all 24,000 learned fold units")
+    if payload.get("full_data_fit_units") != 2_400:
+        raise ValueError("ETA gate does not cover all 2,400 full-data raw fits")
     if float(payload.get("guarded_projected_walltime_hours", float("inf"))) > 84.0:
         raise ValueError("ETA gate exceeds the frozen 84-hour ceiling")
     covered = payload.get("confirmatory_run_ids")
@@ -1043,6 +1045,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             pilot_fold_rows=pilot_rows,
             pilot_dataset_rows=pilot_dataset_rows,
             confirmatory_manifests=full,
+            expected_full_data_fit_units=2_400,
         )
         provenance_reasons = _eta_compatibility_reasons(pilot_manifests, full)
         if provenance_reasons:
