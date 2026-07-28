@@ -223,6 +223,11 @@ def execute_worker(
                 initial_q_by_fold=initial_matrix,
                 fold_runtime_sec=fold_runtime,
                 retry_count=retry_count,
+                paths=EstimatorPaths(
+                    google_research=google_research,
+                    dice_rl=dice_rl,
+                    scope_rl=scope_rl,
+                ),
             )
             arrays = dict(result.calibration_arrays)
             for candidate_id, values in result.candidate_arrays.items():

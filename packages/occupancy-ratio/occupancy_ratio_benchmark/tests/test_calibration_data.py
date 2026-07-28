@@ -5,6 +5,7 @@ import pytest
 
 from occupancy_ratio_benchmark.calibration_data import (
     DatasetPaths,
+    _validate_target_occupancy_pools,
     build_calibration_dataset,
     calibration_group_ids,
     read_dataset_bundle,
@@ -69,3 +70,23 @@ def test_stopped_dataset_is_rejected() -> None:
     dataset.initial_retention = np.zeros(dataset.initial_states.shape[0])
     with pytest.raises(ValueError, match="coverage-stopped"):
         validate_normalized_dataset(dataset)
+
+
+def test_target_occupancy_pool_contract_is_strict() -> None:
+    dataset = make_discrete_dataset(
+        setting="random_tabular_mdp",
+        gamma=0.9,
+        sample_size=16,
+        seed=4,
+    )
+    dataset.target_occupancy_states = np.repeat(dataset.states[:1], 6, axis=0)
+    dataset.target_occupancy_actions = np.repeat(dataset.actions[:1], 6, axis=0)
+    dataset.target_occupancy_episode_ids = np.arange(6)
+    dataset.target_occupancy_pool_ids = np.repeat([0, 1], 3)
+    dataset.metadata["target_occupancy_trajectories_per_pool"] = 3
+    dataset.metadata["target_occupancy_status"] = "cache:mc_rollout_ok"
+
+    _validate_target_occupancy_pools(dataset, trajectories_per_pool=3)
+    dataset.target_occupancy_pool_ids[-1] = 0
+    with pytest.raises(ValueError, match="two equal"):
+        _validate_target_occupancy_pools(dataset, trajectories_per_pool=3)

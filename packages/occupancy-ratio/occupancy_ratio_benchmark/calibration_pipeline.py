@@ -155,6 +155,7 @@ def execute_aggregation(
     initial_q_by_fold: Array,
     fold_runtime_sec: Sequence[float] = (),
     retry_count: int = 0,
+    paths: EstimatorPaths | None = None,
 ) -> AggregationOutput:
     """Fit one pooled OOF map, apply it foldwise, median, and evaluate."""
 
@@ -186,6 +187,29 @@ def execute_aggregation(
     identity = _flat_evaluation_identity(unit, dataset)
     axes = _mapping(_mapping(unit, "identity"), "axis_values")
     estimator_id = str(_mapping(unit, "identity")["estimator_id"])
+    full_data_result: FoldPredictionResult | None = None
+    registry_entry = _mapping(
+        _mapping(_config(manifest), "estimator_registry"),
+        estimator_id,
+    )
+    if registry_entry.get("crossfit_base_fit_required") is True:
+        full_data_result = fit_fold_predictions(
+            estimator_id=estimator_id,
+            dataset=dataset,
+            train_source_indices=np.arange(dataset.n, dtype=np.int64),
+            train_initial_indices=np.arange(
+                np.asarray(dataset.initial_states).shape[0],
+                dtype=np.int64,
+            ),
+            fold_index=-1,
+            fit_seed=stable_uint32(
+                manifest["run_id"],
+                unit["unit_id"],
+                "full-data-base-fit",
+            ),
+            registry_entry=registry_entry,
+            paths=paths,
+        )
     rows, arrays = evaluate_cross_calibrated_result(
         dataset=dataset,
         result=result,
@@ -199,6 +223,20 @@ def execute_aggregation(
         fold_runtime_sec=fold_runtime_sec,
         aggregation_runtime_sec=runtime,
         retry_count=int(retry_count),
+        full_data_predictions=(
+            None
+            if full_data_result is None
+            else {
+                "current": full_data_result.source_q,
+                "next": full_data_result.next_q,
+                "initial": full_data_result.initial_q,
+            }
+        ),
+        full_data_fit_runtime_sec=(
+            None
+            if full_data_result is None
+            else full_data_result.fit_runtime_sec
+        ),
     )
     diagnostics = {
         **result.diagnostics,
@@ -206,6 +244,11 @@ def execute_aggregation(
         "pava_diagnostics": calibrator_diagnostics,
         "aggregation_runtime_sec": runtime,
         "dependency_count": len(unit.get("depends_on", [])),
+        "full_data_fit_diagnostics": (
+            None
+            if full_data_result is None
+            else full_data_result.diagnostics
+        ),
     }
     calibration_arrays = {
         "pooled_oof_source_raw": np.asarray(result.pooled_oof.source_q),

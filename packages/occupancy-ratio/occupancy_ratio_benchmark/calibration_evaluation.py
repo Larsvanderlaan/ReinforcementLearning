@@ -17,6 +17,7 @@ from occupancy_ratio_benchmark.calibration_crossfit import CrossCalibratedMatrix
 from occupancy_ratio_benchmark.calibration_metrics import (
     controlled_ratio_errors,
     estimate_bellman_cross_moment_error,
+    estimate_multi_reward_occupancy_functional_error,
     oracle_floor_kl_sensitivity,
 )
 from occupancy_ratio_benchmark.calibration_truth import has_exact_finite_support
@@ -29,6 +30,7 @@ CANDIDATE_IDS = (
     "scalar_normalized_pointwise_median",
     "pava_pointwise_median",
 )
+FULL_DATA_CANDIDATE_ID = "full_data_raw"
 
 
 def evaluate_cross_calibrated_result(
@@ -43,6 +45,8 @@ def evaluate_cross_calibrated_result(
     fold_runtime_sec: Sequence[float] = (),
     aggregation_runtime_sec: float = 0.0,
     retry_count: int = 0,
+    full_data_predictions: Mapping[str, Array] | None = None,
+    full_data_fit_runtime_sec: float | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, Array]]]:
     """Evaluate all frozen candidates and return flat rows plus predictions.
 
@@ -65,6 +69,17 @@ def evaluate_cross_calibrated_result(
 
     candidate_arrays = _candidate_arrays(result)
     pooled_basis = _pooled_basis_arrays(result)
+    candidate_ids = list(CANDIDATE_IDS)
+    if full_data_predictions is not None:
+        full_data = _validated_prediction_roles(
+            full_data_predictions,
+            source_n=dataset.n,
+            next_n=dataset.n,
+            initial_n=initial_n,
+        )
+        candidate_arrays[FULL_DATA_CANDIDATE_ID] = full_data
+        pooled_basis[FULL_DATA_CANDIDATE_ID] = full_data["current"]
+        candidate_ids.append(FULL_DATA_CANDIDATE_ID)
     split_seed = _stable_seed(identity)
     common = {
         **{str(key): value for key, value in identity.items()},
@@ -81,8 +96,6 @@ def evaluate_cross_calibrated_result(
         "coverage_stopping": False,
         "base_upper_cap_enabled": False,
         "base_query_normalization_enabled": False,
-        "calibration_fit": "single_map_on_pooled_oof_scores",
-        "pointwise_aggregation": "median",
         "cross_moment_split_seed": int(split_seed),
         "cross_moment_halves_used_for_fit": False,
         "cross_moment_debiasing_basis": "pooled_oof_candidate_predictions",
@@ -100,13 +113,15 @@ def evaluate_cross_calibrated_result(
         "fold_runtime_total_sec": float(np.sum(fold_runtime_sec)),
         "aggregation_runtime_sec": float(aggregation_runtime_sec),
         "retry_count": int(retry_count),
+        "full_data_fit_runtime_sec": _optional_float(full_data_fit_runtime_sec),
     }
     rows: list[dict[str, Any]] = []
     rewards = np.asarray(dataset.rewards, dtype=np.float64).reshape(-1)
     if rewards.size != dataset.n or not np.all(np.isfinite(rewards)):
         raise ValueError("dataset rewards must be finite and row aligned")
 
-    for candidate_id in CANDIDATE_IDS:
+    for candidate_id in candidate_ids:
+        is_full_data = candidate_id == FULL_DATA_CANDIDATE_ID
         prediction = candidate_arrays[candidate_id]
         current = prediction["current"]
         successor = prediction["next"]
@@ -125,9 +140,36 @@ def evaluate_cross_calibrated_result(
         value_estimate = float(np.mean(current * rewards))
         value_fields = _value_error_fields(dataset, value_estimate)
         diagnostics = weight_diagnostics(current)
+        functional_fields, functional_arrays = _occupancy_functional_fields(
+            dataset,
+            current,
+            panel_seed=_stable_reward_panel_seed(identity),
+        )
+        prediction.update(functional_arrays)
         row: dict[str, Any] = {
             **common,
             "candidate_id": candidate_id,
+            "fit_scope": (
+                "full_data"
+                if is_full_data
+                else f"oof{int(result.assignment.num_folds)}"
+            ),
+            "num_base_fits": (
+                1 if is_full_data else int(result.assignment.num_folds)
+            ),
+            "calibration_fit": (
+                "none"
+                if is_full_data
+                else "single_map_on_pooled_oof_scores"
+            ),
+            "pointwise_aggregation": (
+                "none" if is_full_data else "median"
+            ),
+            "cross_moment_dependence_justification": (
+                "descriptive_full_data_fit"
+                if is_full_data
+                else "grouped_cross_calibration_theorem"
+            ),
             "policy_value_estimate": value_estimate,
             **value_fields,
             "cross_moment_signed_squared_error": float(
@@ -153,6 +195,7 @@ def evaluate_cross_calibrated_result(
             ),
             "cross_moment_n_union_groups": int(cross_moment.n_union_groups),
             **diagnostics,
+            **functional_fields,
             **_controlled_fields(dataset, current),
         }
         if candidate_id == "pava_pointwise_median":
@@ -272,6 +315,112 @@ def _pooled_basis_arrays(result: CrossCalibratedMatrixResult) -> dict[str, Array
     }
 
 
+def _validated_prediction_roles(
+    predictions: Mapping[str, Array],
+    *,
+    source_n: int,
+    next_n: int,
+    initial_n: int,
+) -> dict[str, Array]:
+    expected = {
+        "current": int(source_n),
+        "next": int(next_n),
+        "initial": int(initial_n),
+    }
+    output: dict[str, Array] = {}
+    for role, size in expected.items():
+        if role not in predictions:
+            raise ValueError(f"full_data_predictions is missing {role!r}")
+        value = np.asarray(predictions[role], dtype=np.float64).reshape(-1)
+        if value.size != size:
+            raise ValueError(
+                f"full_data_predictions[{role!r}] must have {size} rows"
+            )
+        if not np.all(np.isfinite(value)) or np.any(value < 0.0):
+            raise ValueError(
+                f"full_data_predictions[{role!r}] must be finite and nonnegative"
+            )
+        output[role] = value
+    return output
+
+
+def _occupancy_functional_fields(
+    dataset: BenchmarkDataset,
+    current: Array,
+    *,
+    panel_seed: int,
+) -> tuple[dict[str, Any], dict[str, Array]]:
+    names = (
+        "occupancy_functional_reward_count",
+        "occupancy_functional_cross_pool_signed_mse",
+        "occupancy_functional_positive_part_root_mse",
+        "occupancy_functional_pooled_rmse",
+        "occupancy_functional_pooled_mae",
+        "occupancy_functional_pooled_max_absolute_error",
+        "occupancy_functional_target_pool_a_rows",
+        "occupancy_functional_target_pool_b_rows",
+        "occupancy_functional_panel_sha256",
+        "occupancy_functional_panel_seed",
+        "occupancy_functional_panel_bandwidths",
+    )
+    target_arrays = (
+        dataset.target_occupancy_states,
+        dataset.target_occupancy_actions,
+        dataset.target_occupancy_pool_ids,
+    )
+    if any(value is None for value in target_arrays):
+        return {name: None for name in names}, {}
+
+    target_states = np.asarray(dataset.target_occupancy_states)
+    target_actions = np.asarray(dataset.target_occupancy_actions)
+    pool_ids = np.asarray(dataset.target_occupancy_pool_ids).reshape(-1)
+    pool_values = np.unique(pool_ids)
+    if not np.array_equal(pool_values, np.asarray([0, 1])):
+        raise ValueError("functional evaluation requires target pool ids {0, 1}")
+    in_a = pool_ids == 0
+    in_b = pool_ids == 1
+    metric = estimate_multi_reward_occupancy_functional_error(
+        source_states=np.asarray(dataset.states),
+        source_actions=np.asarray(dataset.actions),
+        candidate_weights=np.asarray(current),
+        target_states_a=target_states[in_a],
+        target_actions_a=target_actions[in_a],
+        target_states_b=target_states[in_b],
+        target_actions_b=target_actions[in_b],
+        reward_count=256,
+        bandwidths=(0.5, 1.0, 2.0),
+        seed=int(panel_seed),
+    )
+    fields = {
+        "occupancy_functional_reward_count": int(metric.panel.reward_count),
+        "occupancy_functional_cross_pool_signed_mse": float(
+            metric.signed_cross_pool_mse
+        ),
+        "occupancy_functional_positive_part_root_mse": float(
+            metric.positive_part_root_mse
+        ),
+        "occupancy_functional_pooled_rmse": float(metric.pooled_rmse),
+        "occupancy_functional_pooled_mae": float(metric.pooled_mae),
+        "occupancy_functional_pooled_max_absolute_error": float(
+            metric.pooled_max_absolute_error
+        ),
+        "occupancy_functional_target_pool_a_rows": int(metric.n_target_a),
+        "occupancy_functional_target_pool_b_rows": int(metric.n_target_b),
+        "occupancy_functional_panel_sha256": metric.panel.panel_sha256,
+        "occupancy_functional_panel_seed": int(metric.panel.seed),
+        "occupancy_functional_panel_bandwidths": list(metric.panel.bandwidths),
+    }
+    arrays = {
+        "functional_source": np.asarray(metric.source_functionals),
+        "functional_target_a": np.asarray(metric.target_functionals_a),
+        "functional_target_b": np.asarray(metric.target_functionals_b),
+        "functional_error_a": np.asarray(metric.error_a),
+        "functional_error_b": np.asarray(metric.error_b),
+        "functional_pooled_error": np.asarray(metric.pooled_error),
+    }
+    return fields, arrays
+
+
 def _value_error_fields(dataset: BenchmarkDataset, estimate: float) -> dict[str, Any]:
     truth = dataset.target_policy_value
     truth_se = dataset.target_policy_value_se
@@ -366,6 +515,17 @@ def _stable_seed(identity: Mapping[str, Any]) -> int:
     return int.from_bytes(digest[:4], "little", signed=False)
 
 
+def _stable_reward_panel_seed(identity: Mapping[str, Any]) -> int:
+    keys = ("benchmark_family", "cell_id", "gamma")
+    payload = "|".join(
+        f"{key}={identity[key]}" for key in keys if key in identity
+    )
+    digest = hashlib.sha256(
+        f"occupancy-functional-reward-panel-v1|{payload}".encode("utf-8")
+    ).digest()
+    return int.from_bytes(digest[:4], "little", signed=False)
+
+
 def _optional_float(value: object) -> float | None:
     if value is None:
         return None
@@ -375,6 +535,7 @@ def _optional_float(value: object) -> float | None:
 
 __all__: Sequence[str] = (
     "CANDIDATE_IDS",
+    "FULL_DATA_CANDIDATE_ID",
     "evaluate_cross_calibrated_result",
     "weight_diagnostics",
 )

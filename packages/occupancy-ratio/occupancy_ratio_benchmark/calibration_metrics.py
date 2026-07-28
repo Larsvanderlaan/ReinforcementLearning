@@ -122,6 +122,53 @@ class OracleFloorKLSensitivity:
     points: tuple[OracleFloorKLPoint, ...]
 
 
+@dataclass(frozen=True)
+class OccupancyFunctionalPanelMetadata:
+    """Reconstruction metadata for a deterministic bounded RFF reward panel."""
+
+    reward_count: int
+    state_dimension: int
+    action_dimension: int
+    input_dimension: int
+    bandwidths: tuple[float, ...]
+    rewards_per_bandwidth: tuple[int, ...]
+    seed: int
+    standardization_scale_floor: float
+    feature_center: tuple[float, ...]
+    feature_scale: tuple[float, ...]
+    reward_lower_bound: float
+    reward_upper_bound: float
+    evaluation_batch_size: int
+    panel_sha256: str
+
+
+@dataclass(frozen=True)
+class MultiRewardOccupancyFunctionalMetrics:
+    """Truth-free errors over a deterministic panel of bounded rewards.
+
+    The two target pools are used only for evaluation.  Their signed error
+    cross-product estimates the squared functional error without the additive
+    target-sample variance of a same-pool squared error.  The pooled summaries
+    are descriptive plug-in errors and are not debiased.
+    """
+
+    signed_cross_pool_mse: float
+    positive_part_root_mse: float
+    pooled_rmse: float
+    pooled_mae: float
+    pooled_max_absolute_error: float
+    source_functionals: tuple[float, ...]
+    target_functionals_a: tuple[float, ...]
+    target_functionals_b: tuple[float, ...]
+    error_a: tuple[float, ...]
+    error_b: tuple[float, ...]
+    pooled_error: tuple[float, ...]
+    n_source: int
+    n_target_a: int
+    n_target_b: int
+    panel: OccupancyFunctionalPanelMetadata
+
+
 def estimate_bellman_cross_moment_error(
     *,
     basis_candidate_weights: Array,
@@ -300,6 +347,223 @@ def estimate_bellman_cross_moment_error(
         n_initial_groups_b=len(initial_groups & groups_b),
         split_seed=seed,
         basis_audit_groups_disjoint=basis_disjoint,
+    )
+
+
+def estimate_multi_reward_occupancy_functional_error(
+    *,
+    source_states: Array,
+    source_actions: Array,
+    candidate_weights: Array,
+    target_states_a: Array,
+    target_actions_a: Array,
+    target_states_b: Array,
+    target_actions_b: Array,
+    reward_count: int = 64,
+    bandwidths: Sequence[float] = (0.5, 1.0, 2.0),
+    seed: int = 0,
+    standardization_scale_floor: float = 1e-6,
+    evaluation_batch_size: int = 16_384,
+) -> MultiRewardOccupancyFunctionalMetrics:
+    """Compare weighted source and target occupancies over bounded rewards.
+
+    A deterministic panel of random Fourier feature (RFF) rewards is built on
+    the concatenated state-action input.  Source-derived coordinate means and
+    standard deviations standardize all three samples.  Each reward is
+
+    ``r_j(x) = cos(omega_j.T @ standardized(x) + phase_j)``,
+
+    so every reward lies in ``[-1, 1]``.  Bandwidths are assigned cyclically to
+    the panel, and ``omega_j`` is Gaussian with coordinate standard deviation
+    equal to the inverse assigned bandwidth.
+
+    For each reward, the candidate occupancy functional is
+    ``mean_source(candidate_weight * reward)``.  Candidate weights are not
+    renormalized: doing so would conceal occupancy-mass error.  Let ``e_A`` and
+    ``e_B`` be its errors against independent target occupancy pools.  The
+    primary signed statistic is ``mean(e_A * e_B)``.  Conditional on the
+    source rows, candidate, and fixed reward panel, independent target pools
+    remove the additive target Monte Carlo variance from this cross-product.
+    Its positive-part square root is supplied only as a descriptive plot
+    quantity.  RMSE, MAE, and maximum error use the size-weighted pooled target
+    mean and retain ordinary plug-in target-sample noise.
+
+    Parameters
+    ----------
+    source_states, source_actions:
+        Source-distribution state and action rows.  One-dimensional inputs are
+        interpreted as a single coordinate; two-dimensional inputs are
+        interpreted as feature matrices.
+    candidate_weights:
+        One-dimensional nonnegative finite candidate occupancy weights, with
+        one value per source row.
+    target_states_a, target_actions_a, target_states_b, target_actions_b:
+        Two nonempty, independent target-occupancy evaluation pools.  State and
+        action dimensions must match the source arrays.
+    reward_count:
+        Positive number of bounded RFF rewards.
+    bandwidths:
+        Nonempty sequence of positive finite RFF bandwidths.
+    seed:
+        Integer seed for the deterministic reward panel.
+    standardization_scale_floor:
+        Positive lower bound for source coordinate standard deviations.
+    evaluation_batch_size:
+        Positive row batch size used to avoid materializing a full
+        ``rows x reward_count`` matrix.
+
+    Returns
+    -------
+    MultiRewardOccupancyFunctionalMetrics
+        Cross-pool and pooled functional errors, per-reward audit values, sample
+        sizes, and complete panel reconstruction metadata.
+
+    Raises
+    ------
+    ValueError
+        If an input is empty, nonfinite, shape-incompatible, or if a tuning
+        value is invalid.
+    """
+
+    source_state = _as_feature_matrix(source_states, name="source_states")
+    source_action = _as_feature_matrix(source_actions, name="source_actions")
+    target_state_a = _as_feature_matrix(target_states_a, name="target_states_a")
+    target_action_a = _as_feature_matrix(target_actions_a, name="target_actions_a")
+    target_state_b = _as_feature_matrix(target_states_b, name="target_states_b")
+    target_action_b = _as_feature_matrix(target_actions_b, name="target_actions_b")
+    _validate_state_action_rows(
+        source_state,
+        source_action,
+        state_name="source_states",
+        action_name="source_actions",
+    )
+    _validate_state_action_rows(
+        target_state_a,
+        target_action_a,
+        state_name="target_states_a",
+        action_name="target_actions_a",
+    )
+    _validate_state_action_rows(
+        target_state_b,
+        target_action_b,
+        state_name="target_states_b",
+        action_name="target_actions_b",
+    )
+    if target_state_a.shape[1] != source_state.shape[1] or target_state_b.shape[1] != source_state.shape[1]:
+        raise ValueError("target state dimensions must match source_states")
+    if target_action_a.shape[1] != source_action.shape[1] or target_action_b.shape[1] != source_action.shape[1]:
+        raise ValueError("target action dimensions must match source_actions")
+
+    weight = _as_nonnegative_finite_vector(candidate_weights, name="candidate_weights")
+    if weight.size != source_state.shape[0]:
+        raise ValueError(f"candidate_weights must have length {source_state.shape[0]}")
+    n_rewards = _validate_positive_integer(reward_count, name="reward_count")
+    panel_seed = _validate_integer(seed, name="seed")
+    scale_floor = _validate_positive_finite(
+        standardization_scale_floor,
+        name="standardization_scale_floor",
+    )
+    batch_size = _validate_positive_integer(
+        evaluation_batch_size,
+        name="evaluation_batch_size",
+    )
+    panel_bandwidths = _positive_finite_tuple(bandwidths, name="bandwidths")
+
+    source_input = np.concatenate((source_state, source_action), axis=1)
+    target_input_a = np.concatenate((target_state_a, target_action_a), axis=1)
+    target_input_b = np.concatenate((target_state_b, target_action_b), axis=1)
+    center = np.mean(source_input, axis=0, dtype=np.float64)
+    scale = np.std(source_input, axis=0, dtype=np.float64)
+    scale = np.maximum(scale, scale_floor)
+
+    bandwidth_index = np.arange(n_rewards, dtype=np.int64) % len(panel_bandwidths)
+    assigned_bandwidth = np.asarray(panel_bandwidths, dtype=np.float64)[bandwidth_index]
+    rng = np.random.default_rng(panel_seed)
+    frequency = rng.standard_normal((n_rewards, source_input.shape[1]))
+    frequency /= assigned_bandwidth[:, None]
+    phase = rng.uniform(0.0, 2.0 * np.pi, size=n_rewards)
+
+    source_mean = _bounded_rff_mean(
+        source_input,
+        center=center,
+        scale=scale,
+        frequency=frequency,
+        phase=phase,
+        row_weight=weight,
+        batch_size=batch_size,
+    )
+    target_mean_a = _bounded_rff_mean(
+        target_input_a,
+        center=center,
+        scale=scale,
+        frequency=frequency,
+        phase=phase,
+        row_weight=None,
+        batch_size=batch_size,
+    )
+    target_mean_b = _bounded_rff_mean(
+        target_input_b,
+        center=center,
+        scale=scale,
+        frequency=frequency,
+        phase=phase,
+        row_weight=None,
+        batch_size=batch_size,
+    )
+    error_a = source_mean - target_mean_a
+    error_b = source_mean - target_mean_b
+    target_pooled = (
+        target_input_a.shape[0] * target_mean_a
+        + target_input_b.shape[0] * target_mean_b
+    ) / (target_input_a.shape[0] + target_input_b.shape[0])
+    pooled_error = source_mean - target_pooled
+
+    signed_mse = float(np.mean(error_a * error_b))
+    pooled_squared_error = float(np.mean(np.square(pooled_error)))
+    reward_counts = np.bincount(
+        bandwidth_index,
+        minlength=len(panel_bandwidths),
+    )
+    panel_digest = _rff_panel_digest(
+        center=center,
+        scale=scale,
+        frequency=frequency,
+        phase=phase,
+        bandwidths=panel_bandwidths,
+        seed=panel_seed,
+    )
+    metadata = OccupancyFunctionalPanelMetadata(
+        reward_count=n_rewards,
+        state_dimension=int(source_state.shape[1]),
+        action_dimension=int(source_action.shape[1]),
+        input_dimension=int(source_input.shape[1]),
+        bandwidths=panel_bandwidths,
+        rewards_per_bandwidth=tuple(int(value) for value in reward_counts),
+        seed=panel_seed,
+        standardization_scale_floor=scale_floor,
+        feature_center=tuple(float(value) for value in center),
+        feature_scale=tuple(float(value) for value in scale),
+        reward_lower_bound=-1.0,
+        reward_upper_bound=1.0,
+        evaluation_batch_size=batch_size,
+        panel_sha256=panel_digest,
+    )
+    return MultiRewardOccupancyFunctionalMetrics(
+        signed_cross_pool_mse=signed_mse,
+        positive_part_root_mse=float(np.sqrt(max(signed_mse, 0.0))),
+        pooled_rmse=float(np.sqrt(pooled_squared_error)),
+        pooled_mae=float(np.mean(np.abs(pooled_error))),
+        pooled_max_absolute_error=float(np.max(np.abs(pooled_error))),
+        source_functionals=tuple(float(value) for value in source_mean),
+        target_functionals_a=tuple(float(value) for value in target_mean_a),
+        target_functionals_b=tuple(float(value) for value in target_mean_b),
+        error_a=tuple(float(value) for value in error_a),
+        error_b=tuple(float(value) for value in error_b),
+        pooled_error=tuple(float(value) for value in pooled_error),
+        n_source=int(source_input.shape[0]),
+        n_target_a=int(target_input_a.shape[0]),
+        n_target_b=int(target_input_b.shape[0]),
+        panel=metadata,
     )
 
 
@@ -708,6 +972,89 @@ def _as_nonnegative_finite_vector(values: Array, *, name: str) -> Array:
     return array
 
 
+def _as_feature_matrix(values: Array, *, name: str) -> Array:
+    array = np.asarray(values, dtype=np.float64)
+    if array.ndim == 1:
+        array = array[:, None]
+    if array.ndim != 2:
+        raise ValueError(f"{name} must be one- or two-dimensional")
+    if array.shape[0] == 0 or array.shape[1] == 0:
+        raise ValueError(f"{name} must be nonempty")
+    if not np.all(np.isfinite(array)):
+        raise ValueError(f"{name} must contain only finite values")
+    return array
+
+
+def _validate_state_action_rows(
+    states: Array,
+    actions: Array,
+    *,
+    state_name: str,
+    action_name: str,
+) -> None:
+    if states.shape[0] != actions.shape[0]:
+        raise ValueError(f"{state_name} and {action_name} must have equal row counts")
+
+
+def _positive_finite_tuple(values: Sequence[float], *, name: str) -> tuple[float, ...]:
+    if isinstance(values, (str, bytes)):
+        raise ValueError(f"{name} must be a nonempty sequence")
+    try:
+        result = tuple(float(value) for value in values)
+    except TypeError as error:
+        raise ValueError(f"{name} must be a nonempty sequence") from error
+    if not result:
+        raise ValueError(f"{name} must be a nonempty sequence")
+    if any(not np.isfinite(value) or value <= 0.0 for value in result):
+        raise ValueError(f"{name} must contain only positive finite values")
+    return result
+
+
+def _bounded_rff_mean(
+    inputs: Array,
+    *,
+    center: Array,
+    scale: Array,
+    frequency: Array,
+    phase: Array,
+    row_weight: Array | None,
+    batch_size: int,
+) -> Array:
+    total = np.zeros(frequency.shape[0], dtype=np.float64)
+    for start in range(0, inputs.shape[0], batch_size):
+        stop = min(start + batch_size, inputs.shape[0])
+        standardized = (inputs[start:stop] - center) / scale
+        with np.errstate(over="ignore", invalid="ignore"):
+            projection = standardized @ frequency.T
+        if not np.all(np.isfinite(projection)):
+            raise ValueError("standardized RFF projections must be finite")
+        reward = np.cos(projection + phase)
+        if row_weight is None:
+            total += np.sum(reward, axis=0)
+        else:
+            total += row_weight[start:stop] @ reward
+    return total / inputs.shape[0]
+
+
+def _rff_panel_digest(
+    *,
+    center: Array,
+    scale: Array,
+    frequency: Array,
+    phase: Array,
+    bandwidths: tuple[float, ...],
+    seed: int,
+) -> str:
+    digest = hashlib.sha256()
+    digest.update(b"occupancy-functional-rff-v1\0")
+    digest.update(str(seed).encode("ascii"))
+    for array in (center, scale, frequency, phase, np.asarray(bandwidths)):
+        contiguous = np.ascontiguousarray(array, dtype="<f8")
+        digest.update(np.asarray(contiguous.shape, dtype="<i8").tobytes())
+        digest.update(contiguous.tobytes())
+    return digest.hexdigest()
+
+
 def _validate_gamma(gamma: float) -> float:
     value = float(gamma)
     if not np.isfinite(value) or not 0.0 <= value < 1.0:
@@ -719,6 +1066,13 @@ def _validate_nonnegative_finite(value: float, *, name: str) -> float:
     result = float(value)
     if not np.isfinite(result) or result < 0.0:
         raise ValueError(f"{name} must be finite and nonnegative")
+    return result
+
+
+def _validate_positive_finite(value: float, *, name: str) -> float:
+    result = float(value)
+    if not np.isfinite(result) or result <= 0.0:
+        raise ValueError(f"{name} must be finite and positive")
     return result
 
 
@@ -739,10 +1093,13 @@ __all__: Sequence[str] = (
     "BellmanCrossMomentMetrics",
     "ControlledRatioMetrics",
     "CrossMomentScaleEstimate",
+    "MultiRewardOccupancyFunctionalMetrics",
+    "OccupancyFunctionalPanelMetadata",
     "OracleFloorKLPoint",
     "OracleFloorKLSensitivity",
     "controlled_ratio_errors",
     "estimate_bellman_cross_moment_error",
+    "estimate_multi_reward_occupancy_functional_error",
     "generalized_kl_divergence",
     "oracle_floor_kl_sensitivity",
 )

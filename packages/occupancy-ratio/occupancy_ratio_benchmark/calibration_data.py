@@ -101,6 +101,10 @@ def build_calibration_dataset(
         from occupancy_ratio_benchmark.d4rl_ope import make_d4rl_ope_dataset  # noqa: PLC0415
 
         truth = _mapping(resolved_config, "truth")
+        target_occupancy_trajectories_per_pool = _nonnegative_int(
+            resolved_config.get("target_occupancy_trajectories_per_pool", 0),
+            "target_occupancy_trajectories_per_pool",
+        )
 
         def build(rollouts: int) -> BenchmarkDataset:
             return make_d4rl_ope_dataset(
@@ -111,11 +115,15 @@ def build_calibration_dataset(
                 asset_cache_dir=paths.asset_cache,
                 install_assets=bool(paths.install_assets),
                 target_value_rollouts=int(rollouts),
-                target_occupancy_trajectories_per_pool=0,
+                target_occupancy_trajectories_per_pool=target_occupancy_trajectories_per_pool,
                 require_exact_rollout_env=True,
             )
 
         dataset, truth_stages = _adaptive_truth_dataset(build, truth)
+        _validate_target_occupancy_pools(
+            dataset,
+            trajectories_per_pool=target_occupancy_trajectories_per_pool,
+        )
     else:
         from occupancy_ratio_benchmark.dice_rl_repro import (  # noqa: PLC0415
             make_dice_rl_reproduction_dataset,
@@ -222,6 +230,58 @@ def validate_normalized_dataset(dataset: BenchmarkDataset) -> None:
         float(dataset.target_occupancy_mass), 1.0
     ):
         raise ValueError("target occupancy mass must be one for normalized calibration")
+
+
+def _validate_target_occupancy_pools(
+    dataset: BenchmarkDataset,
+    *,
+    trajectories_per_pool: int,
+) -> None:
+    per_pool = _nonnegative_int(
+        trajectories_per_pool,
+        "target_occupancy_trajectories_per_pool",
+    )
+    metadata_count = _nonnegative_int(
+        dataset.metadata.get("target_occupancy_trajectories_per_pool", 0),
+        "metadata.target_occupancy_trajectories_per_pool",
+    )
+    if metadata_count != per_pool:
+        raise ValueError(
+            "target occupancy telemetry does not match the requested trajectories per pool"
+        )
+    status = str(dataset.metadata.get("target_occupancy_status", ""))
+    target_arrays = (
+        dataset.target_occupancy_states,
+        dataset.target_occupancy_actions,
+        dataset.target_occupancy_episode_ids,
+        dataset.target_occupancy_pool_ids,
+    )
+    if per_pool == 0:
+        if status != "disabled" or any(value is not None for value in target_arrays):
+            raise ValueError("disabled target occupancy must have disabled status and no pool arrays")
+        return
+    if status not in {"mc_rollout_ok", "cache:mc_rollout_ok"}:
+        raise ValueError(f"target occupancy cache/rollout is not usable: {status or 'missing status'}")
+    if any(value is None for value in target_arrays):
+        raise ValueError("enabled target occupancy requires complete pool arrays")
+
+    states = np.asarray(dataset.target_occupancy_states)
+    actions = np.asarray(dataset.target_occupancy_actions)
+    episode_ids = np.asarray(dataset.target_occupancy_episode_ids).reshape(-1)
+    pool_ids = np.asarray(dataset.target_occupancy_pool_ids).reshape(-1)
+    expected = 2 * per_pool
+    if states.shape[0] != expected or actions.shape[0] != expected:
+        raise ValueError(f"target occupancy must contain exactly {expected} pooled trajectories")
+    if not np.all(np.isfinite(states)) or not np.all(np.isfinite(actions)):
+        raise ValueError("target occupancy pool arrays must be finite")
+    if np.unique(episode_ids).size != expected:
+        raise ValueError("target occupancy episode ids must identify independent trajectories")
+    pool_values, pool_counts = np.unique(pool_ids, return_counts=True)
+    if not np.array_equal(pool_values, np.asarray([0, 1])) or not np.array_equal(
+        pool_counts,
+        np.asarray([per_pool, per_pool]),
+    ):
+        raise ValueError("target occupancy must contain two equal, labeled pools")
 
 
 def write_dataset_bundle(path: str | Path, bundle: CalibrationDatasetBundle) -> dict[str, Any]:
@@ -474,6 +534,13 @@ def _positive_int(value: object, name: str) -> int:
     result = _integer(value, name)
     if result <= 0:
         raise ValueError(f"{name} must be positive")
+    return result
+
+
+def _nonnegative_int(value: object, name: str) -> int:
+    result = _integer(value, name)
+    if result < 0:
+        raise ValueError(f"{name} must be nonnegative")
     return result
 
 

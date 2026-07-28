@@ -6,6 +6,7 @@ import pytest
 from occupancy_ratio_benchmark.calibration_metrics import (
     controlled_ratio_errors,
     estimate_bellman_cross_moment_error,
+    estimate_multi_reward_occupancy_functional_error,
     generalized_kl_divergence,
     oracle_floor_kl_sensitivity,
 )
@@ -261,6 +262,56 @@ def test_oracle_floor_sensitivity_changes_only_the_oracle_kl() -> None:
 def test_ratio_metric_validation(function, message: str) -> None:
     with pytest.raises(ValueError, match=message):
         function()
+
+
+def test_multi_reward_panel_is_zero_for_identical_occupancies() -> None:
+    rng = np.random.default_rng(91)
+    states = rng.normal(size=(40, 3))
+    actions = rng.normal(size=(40, 2))
+    result = estimate_multi_reward_occupancy_functional_error(
+        source_states=states,
+        source_actions=actions,
+        candidate_weights=np.ones(40),
+        target_states_a=states,
+        target_actions_a=actions,
+        target_states_b=states,
+        target_actions_b=actions,
+        reward_count=17,
+        seed=8,
+        evaluation_batch_size=11,
+    )
+
+    assert result.signed_cross_pool_mse == pytest.approx(0.0, abs=1e-30)
+    assert result.positive_part_root_mse == pytest.approx(0.0, abs=1e-15)
+    assert result.pooled_rmse == pytest.approx(0.0, abs=1e-15)
+    assert result.panel.reward_count == 17
+    assert sum(result.panel.rewards_per_bandwidth) == 17
+    assert len(result.panel.panel_sha256) == 64
+
+
+def test_multi_reward_panel_is_deterministic_and_detects_error() -> None:
+    rng = np.random.default_rng(92)
+    source_states = rng.normal(size=(50, 2))
+    source_actions = rng.normal(size=(50, 1))
+    target_states = rng.normal(loc=0.8, size=(60, 2))
+    target_actions = rng.normal(loc=-0.5, size=(60, 1))
+    kwargs = {
+        "source_states": source_states,
+        "source_actions": source_actions,
+        "candidate_weights": np.ones(50),
+        "target_states_a": target_states[:30],
+        "target_actions_a": target_actions[:30],
+        "target_states_b": target_states[30:],
+        "target_actions_b": target_actions[30:],
+        "reward_count": 19,
+        "seed": 9,
+    }
+    first = estimate_multi_reward_occupancy_functional_error(**kwargs)
+    second = estimate_multi_reward_occupancy_functional_error(**kwargs)
+
+    assert second == first
+    assert first.pooled_rmse > 0.0
+    assert first.n_target_a == first.n_target_b == 30
 
 
 @pytest.mark.parametrize(

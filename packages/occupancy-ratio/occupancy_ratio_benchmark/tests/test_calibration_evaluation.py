@@ -101,3 +101,55 @@ def test_weight_diagnostics_have_exact_mass_and_ess() -> None:
     assert diagnostics["effective_sample_size"] == pytest.approx(100.0)
     assert diagnostics["effective_sample_size_fraction"] == pytest.approx(1.0)
     assert diagnostics["top_one_percent_weight_mass"] == pytest.approx(0.01)
+
+
+def test_evaluation_adds_full_data_raw_and_multi_reward_endpoints() -> None:
+    dataset, source_groups, initial_groups, result = _fixture()
+    take = np.arange(80)
+    dataset.target_occupancy_states = np.concatenate(
+        [dataset.states[take], dataset.states[take]],
+        axis=0,
+    )
+    dataset.target_occupancy_actions = np.concatenate(
+        [dataset.actions[take], dataset.actions[take]],
+        axis=0,
+    )
+    dataset.target_occupancy_episode_ids = np.arange(160)
+    dataset.target_occupancy_pool_ids = np.repeat([0, 1], 80)
+    rows, arrays = evaluate_cross_calibrated_result(
+        dataset=dataset,
+        result=result,
+        source_groups=source_groups,
+        initial_groups=initial_groups,
+        identity={
+            "study_id": "controlled",
+            "cell_id": "tabular",
+            "benchmark_family": "random_tabular",
+            "gamma": dataset.gamma,
+            "seed": dataset.seed,
+        },
+        estimator_id="fixture",
+        full_data_predictions={
+            "current": np.ones(dataset.n),
+            "next": np.ones(dataset.n),
+            "initial": np.ones(dataset.initial_states.shape[0]),
+        },
+        full_data_fit_runtime_sec=0.4,
+    )
+
+    assert len(rows) == 4
+    assert set(arrays) == {
+        "native_pointwise_median",
+        "scalar_normalized_pointwise_median",
+        "pava_pointwise_median",
+        "full_data_raw",
+    }
+    full = next(row for row in rows if row["candidate_id"] == "full_data_raw")
+    assert full["fit_scope"] == "full_data"
+    assert full["num_base_fits"] == 1
+    assert full["calibration_fit"] == "none"
+    assert full["full_data_fit_runtime_sec"] == pytest.approx(0.4)
+    for row in rows:
+        assert row["occupancy_functional_reward_count"] == 256
+        assert np.isfinite(row["occupancy_functional_cross_pool_signed_mse"])
+        assert len(arrays[row["candidate_id"]]["functional_pooled_error"]) == 256
