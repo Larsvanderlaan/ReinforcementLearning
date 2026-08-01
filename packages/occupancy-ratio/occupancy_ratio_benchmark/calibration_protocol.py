@@ -126,7 +126,7 @@ def _validate_manifest_payload(manifest: Mapping[str, Any]) -> None:
     if not isinstance(cross, Mapping):
         raise CalibrationManifestError("manifest cross_calibration is missing")
     expected = {
-        "base_score_ratio_constraint": "positive_part_projection_no_upper_cap",
+        "base_score_ratio_constraint": "neural_fori_held_out_current_finite_range_clamp_otherwise_positive_part_no_upper_cap",
         "base_query_normalization": False,
         "negative_projection_audit": "count_mass_and_raw_minimum",
         "calibration_fit": "single_map_on_pooled_oof_scores",

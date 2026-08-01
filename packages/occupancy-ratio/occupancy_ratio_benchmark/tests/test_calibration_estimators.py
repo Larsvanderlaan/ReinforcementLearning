@@ -14,6 +14,9 @@ class _PositiveModel:
         assert clip is False
         return 1.0 + 0.01 * np.sum(states, axis=1) + 0.02 * np.sum(actions, axis=1)
 
+    def predict_state_action_log_ratio(self, states, actions, *, clip=True):
+        return np.log(self.predict_state_action_ratio(states, actions, clip=clip))
+
 
 @pytest.mark.parametrize(
     ("estimator", "fit_name"),
@@ -48,7 +51,14 @@ def test_fold_adapter_fits_once_and_predicts_all_rows(monkeypatch, estimator, fi
         train_initial_indices=np.arange(100),
         fold_index=1,
         fit_seed=10_004,
-        registry_entry={"schedule": {"updates": 2, "outer_iterations": 1, "variational_steps": 1}},
+        registry_entry={
+            "schedule": {
+                "updates": 2,
+                "outer_iterations": 1,
+                "variational_steps": 1,
+                "prediction_clamp": adapters.NEURAL_FORI_PREDICTION_CLAMP,
+            }
+        },
     )
 
     assert len(calls) == 1
@@ -56,7 +66,7 @@ def test_fold_adapter_fits_once_and_predicts_all_rows(monkeypatch, estimator, fi
     assert result.next_q.shape == (dataset.n,)
     assert result.initial_q.shape == (dataset.initial_states.shape[0],)
     assert np.all(result.source_q > 0.0)
-    assert result.diagnostics["base_upper_cap_enabled"] is False
+    assert result.diagnostics["base_upper_cap_enabled"] is (estimator == "neural_fori")
     assert result.diagnostics["base_query_normalization_enabled"] is False
     if estimator == "neural_fori":
         assert calls[0]["config"].logit_clip is None
@@ -90,19 +100,85 @@ def test_signed_critic_is_projected_once_to_ratio_cone(monkeypatch) -> None:
             values[0] = -0.5
             return values
 
-    monkeypatch.setattr(adapters, "fit_kl_fori_neural", lambda **kwargs: NegativeModel())
+    monkeypatch.setattr(
+        adapters,
+        "fit_google_dualdice_occupancy_ratio",
+        lambda **kwargs: NegativeModel(),
+    )
     result = adapters.fit_fold_predictions(
-        estimator_id="neural_fori",
+        estimator_id="google_dualdice",
         dataset=dataset,
         train_source_indices=np.arange(15),
         train_initial_indices=np.arange(100),
         fold_index=0,
         fit_seed=0,
-        registry_entry={"schedule": {"outer_iterations": 1, "variational_steps": 1}},
+        registry_entry={"schedule": {"updates": 1}},
     )
     assert result.source_q[0] == 0.0
     assert result.diagnostics["material_negative_projection_count"] >= 1
     assert result.diagnostics["negative_projection_mass"] > 0.0
+
+
+def test_neural_fori_clamps_extrapolated_log_scores_to_current_support(monkeypatch) -> None:
+    dataset = make_discrete_dataset(
+        setting="random_tabular_mdp",
+        gamma=0.9,
+        sample_size=20,
+        seed=4,
+        n_states=6,
+        n_actions=2,
+    )
+
+    class OverflowModel(_PositiveModel):
+        def predict_state_action_log_ratio(self, states, actions, *, clip=True):
+            values = np.zeros(np.asarray(states).shape[0], dtype=np.float64)
+            if values.size == dataset.n:
+                values[0] = np.inf
+                values[1] = -np.inf
+            return values
+
+    monkeypatch.setattr(adapters, "fit_kl_fori_neural", lambda **kwargs: OverflowModel())
+    result = adapters.fit_fold_predictions(
+        estimator_id="neural_fori",
+        dataset=dataset,
+        train_source_indices=np.arange(15),
+        train_initial_indices=np.arange(80),
+        calibration_source_indices=np.arange(15, 20),
+        fold_index=0,
+        fit_seed=0,
+        registry_entry={
+            "schedule": {
+                "outer_iterations": 1,
+                "variational_steps": 1,
+                "prediction_clamp": adapters.NEURAL_FORI_PREDICTION_CLAMP,
+            }
+        },
+    )
+    assert np.all(np.isfinite(result.source_q))
+    assert np.all(np.isfinite(result.next_q))
+    np.testing.assert_array_equal(result.source_q[15:20], np.ones(5))
+    assert result.diagnostics["base_prediction_upper_clamp_count"] >= 1
+    assert result.diagnostics["base_prediction_lower_clamp_count"] >= 1
+    assert result.diagnostics["base_prediction_clamp_reference"] == (
+        "held_out_current_calibration"
+    )
+
+
+def test_log_bounds_keep_full_representable_range() -> None:
+    class ScoreModel:
+        def predict_state_action_log_ratio(self, states, actions, *, clip=True):
+            assert clip is False
+            return np.asarray(states, dtype=np.float64)[:, 0]
+
+    bounds, diagnostics = adapters._finite_log_bounds(
+        ScoreModel(),
+        np.asarray([[-100.0], [0.0], [1.0], [2.0], [100.0]]),
+        np.zeros((5, 1)),
+        chunk_size=2,
+    )
+    assert bounds == (-100.0, 100.0)
+    assert diagnostics["calibration_rows"] == 5
+    assert diagnostics["representable_distinct_scores"] == 5
 
 
 def test_worker_thread_limits_are_forced(monkeypatch) -> None:

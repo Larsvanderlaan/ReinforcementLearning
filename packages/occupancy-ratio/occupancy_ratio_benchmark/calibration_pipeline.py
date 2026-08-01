@@ -110,6 +110,7 @@ def execute_learned_fold(
         raise ValueError("unit train_folds do not match held_out_fold")
     source_train = np.flatnonzero(assignment.source_fold_ids != held_out)
     initial_train = np.flatnonzero(assignment.initial_fold_ids != held_out)
+    source_calibration = np.flatnonzero(assignment.source_fold_ids == held_out)
     fit_seed = stable_uint32(manifest["run_id"], unit["unit_id"], "base-fit")
     return fit_fold_predictions(
         estimator_id=estimator_id,
@@ -120,6 +121,7 @@ def execute_learned_fold(
         fit_seed=fit_seed,
         registry_entry=registry_entry,
         paths=paths,
+        calibration_source_indices=source_calibration,
         prediction_chunk_size=int(prediction_chunk_size),
     )
 
@@ -209,6 +211,7 @@ def execute_aggregation(
             ),
             registry_entry=registry_entry,
             paths=paths,
+            calibration_source_indices=np.arange(dataset.n, dtype=np.int64),
         )
     rows, arrays = evaluate_cross_calibrated_result(
         dataset=dataset,
