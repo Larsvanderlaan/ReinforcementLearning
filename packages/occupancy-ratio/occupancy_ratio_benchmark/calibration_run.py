@@ -33,7 +33,10 @@ from occupancy_ratio_benchmark.calibration_data import (
     write_dataset_bundle,
 )
 from occupancy_ratio_benchmark.calibration_estimators import EstimatorPaths
-from occupancy_ratio_benchmark.calibration_eta import build_eta_gate
+from occupancy_ratio_benchmark.calibration_eta import (
+    build_eta_gate,
+    eta_execution_limits,
+)
 from occupancy_ratio_benchmark.calibration_pipeline import (
     execute_aggregation,
     execute_deterministic_score,
@@ -277,6 +280,11 @@ def execute_worker(
                 ),
                 default=0.0,
             )
+            clamp_diagnostics = _fold_clamp_diagnostics(
+                dependency_metadata,
+                source_rows=int(bundle.dataset.n),
+                initial_rows=int(np.asarray(bundle.dataset.initial_states).shape[0]),
+            )
             rows = [dict(row) for row in result.rows]
             for row in rows:
                 row["base_negative_projection_count_across_folds"] = projection_count
@@ -286,6 +294,7 @@ def execute_worker(
                 ] = material_projection_count
                 row["base_raw_prediction_minimum_across_folds"] = raw_minimum
                 row["fold_peak_memory_mb"] = fold_peak_memory
+                row.update(clamp_diagnostics)
             metadata = {
                 **result.diagnostics,
                 "dataset_id": dataset_id(unit),
@@ -300,6 +309,7 @@ def execute_worker(
                 ),
                 "raw_prediction_minimum_across_folds": raw_minimum,
                 "fold_peak_memory_mb": fold_peak_memory,
+                **clamp_diagnostics,
             }
         else:
             raise ValueError(f"unsupported unit kind {kind!r}")
@@ -479,8 +489,8 @@ def run_manifest(
                 run_root=run_root,
                 command_builder=command,
                 completion_check=complete,
-                maximum_concurrency=min(
-                    2, int(execution["maximum_concurrent_estimator_processes"])
+                maximum_concurrency=int(
+                    execution["maximum_concurrent_aggregation_processes"]
                 ),
                 timeout_sec=float(execution["timeout_sec"]),
                 heartbeat_interval_sec=float(execution["heartbeat_interval_sec"]),
@@ -995,6 +1005,68 @@ def _mapping(mapping: Mapping[str, Any], key: str) -> Mapping[str, Any]:
     return value
 
 
+def _fold_clamp_diagnostics(
+    dependency_metadata: Sequence[Mapping[str, Any]],
+    *,
+    source_rows: int,
+    initial_rows: int,
+) -> dict[str, Any]:
+    """Aggregate deployable Neural FORE clamp telemetry across fold artifacts."""
+
+    fold_metadata = [
+        item.get("metadata", {})
+        for item in dependency_metadata
+        if isinstance(item.get("metadata"), Mapping)
+    ]
+    enabled = [
+        metadata
+        for metadata in fold_metadata
+        if metadata.get("base_upper_cap_enabled") is True
+    ]
+    lower_count = sum(
+        int(metadata.get("base_prediction_lower_clamp_count", 0))
+        for metadata in enabled
+    )
+    upper_count = sum(
+        int(metadata.get("base_prediction_upper_clamp_count", 0))
+        for metadata in enabled
+    )
+    query_count = len(enabled) * (2 * int(source_rows) + int(initial_rows))
+
+    def bounds(name: str) -> list[float]:
+        values = []
+        for metadata in enabled:
+            value = metadata.get(name)
+            if value is not None and np.isfinite(float(value)):
+                values.append(float(value))
+        return values
+
+    lower_bounds = bounds("base_prediction_log_lower_bound")
+    upper_bounds = bounds("base_prediction_log_upper_bound")
+    return {
+        "base_prediction_clamp_enabled_fold_count": len(enabled),
+        "base_prediction_lower_clamp_count_across_folds": lower_count,
+        "base_prediction_upper_clamp_count_across_folds": upper_count,
+        "base_prediction_clamp_fraction_across_folds": (
+            float((lower_count + upper_count) / query_count)
+            if query_count > 0
+            else 0.0
+        ),
+        "base_prediction_log_lower_bound_min_across_folds": (
+            min(lower_bounds) if lower_bounds else None
+        ),
+        "base_prediction_log_lower_bound_max_across_folds": (
+            max(lower_bounds) if lower_bounds else None
+        ),
+        "base_prediction_log_upper_bound_min_across_folds": (
+            min(upper_bounds) if upper_bounds else None
+        ),
+        "base_prediction_log_upper_bound_max_across_folds": (
+            max(upper_bounds) if upper_bounds else None
+        ),
+    }
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1041,10 +1113,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             pilot_rows.extend(_collect_runtime_rows(manifest, root))
             pilot_dataset_rows.extend(_collect_dataset_runtime_rows(root))
         full = [load_calibration_manifest(path) for path in args.confirmatory_manifest]
+        (
+            maximum_concurrency,
+            maximum_aggregation_concurrency,
+            ceiling_hours,
+        ) = eta_execution_limits(full)
         gate = build_eta_gate(
             pilot_fold_rows=pilot_rows,
             pilot_dataset_rows=pilot_dataset_rows,
             confirmatory_manifests=full,
+            maximum_concurrency=maximum_concurrency,
+            maximum_aggregation_concurrency=maximum_aggregation_concurrency,
+            ceiling_hours=ceiling_hours,
             expected_full_data_fit_units=2_400,
         )
         provenance_reasons = _eta_compatibility_reasons(pilot_manifests, full)

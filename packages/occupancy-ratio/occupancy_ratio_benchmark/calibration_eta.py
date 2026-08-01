@@ -18,12 +18,68 @@ TRACK_BY_FAMILY = {
 }
 
 
+def eta_execution_limits(
+    confirmatory_manifests: Sequence[Mapping[str, Any]],
+) -> tuple[int, int, float]:
+    """Resolve verified fold/aggregation concurrency and ETA ceiling."""
+
+    if not confirmatory_manifests:
+        raise ValueError("at least one confirmatory manifest is required")
+    limits: set[tuple[int, int, float]] = set()
+    for manifest in confirmatory_manifests:
+        config = manifest.get("resolved_config")
+        if not isinstance(config, Mapping):
+            raise ValueError("confirmatory manifest lacks resolved_config")
+        execution = config.get("execution")
+        if not isinstance(execution, Mapping):
+            raise ValueError("confirmatory manifest lacks execution config")
+        gate = execution.get("pilot_eta_gate")
+        if not isinstance(gate, Mapping):
+            raise ValueError("confirmatory manifest lacks pilot_eta_gate config")
+        worker_value = execution.get("maximum_concurrent_estimator_processes")
+        aggregation_value = execution.get(
+            "maximum_concurrent_aggregation_processes"
+        )
+        modeled_value = gate.get("maximum_concurrency")
+        if (
+            not isinstance(worker_value, int)
+            or isinstance(worker_value, bool)
+            or worker_value <= 0
+            or not isinstance(aggregation_value, int)
+            or isinstance(aggregation_value, bool)
+            or aggregation_value <= 0
+            or aggregation_value > worker_value
+            or not isinstance(modeled_value, int)
+            or isinstance(modeled_value, bool)
+            or modeled_value <= 0
+        ):
+            raise ValueError(
+                "manifest concurrency limits must be valid positive integers"
+            )
+        if worker_value != modeled_value:
+            raise ValueError(
+                "ETA modeled concurrency does not match estimator worker concurrency"
+            )
+        ceiling_value = gate.get("launch_only_if_projected_hours_at_most")
+        try:
+            ceiling = float(ceiling_value)
+        except (TypeError, ValueError) as error:
+            raise ValueError("manifest ETA ceiling must be numeric") from error
+        if not np.isfinite(ceiling) or ceiling <= 0.0:
+            raise ValueError("manifest ETA ceiling must be positive and finite")
+        limits.add((int(worker_value), int(aggregation_value), ceiling))
+    if len(limits) != 1:
+        raise ValueError("confirmatory manifests have inconsistent ETA execution limits")
+    return next(iter(limits))
+
+
 def build_eta_gate(
     *,
     pilot_fold_rows: Sequence[Mapping[str, Any]],
     confirmatory_manifests: Sequence[Mapping[str, Any]],
     pilot_dataset_rows: Sequence[Mapping[str, Any]] | None = None,
     maximum_concurrency: int = 2,
+    maximum_aggregation_concurrency: int = 2,
     ceiling_hours: float = 84.0,
     contingency_fraction: float = 0.10,
     expected_full_fold_units: int = 24_000,
@@ -42,6 +98,9 @@ def build_eta_gate(
     concurrency = int(maximum_concurrency)
     if concurrency <= 0:
         raise ValueError("maximum_concurrency must be positive")
+    aggregation_concurrency = int(maximum_aggregation_concurrency)
+    if aggregation_concurrency <= 0:
+        raise ValueError("maximum_aggregation_concurrency must be positive")
     ceiling = float(ceiling_hours)
     contingency = float(contingency_fraction)
     if not np.isfinite(ceiling) or ceiling <= 0.0:
@@ -90,7 +149,8 @@ def build_eta_gate(
 
     strata: list[dict[str, Any]] = []
     missing: list[dict[str, Any]] = []
-    serial_seconds = 0.0
+    fold_serial_seconds = 0.0
+    full_data_serial_seconds = 0.0
     for key in sorted(full_counts):
         track, estimator, band = key
         count = int(full_counts[key])
@@ -112,7 +172,8 @@ def build_eta_gate(
         projected_fold = count * p95
         projected_full_data = full_data_count * p95 * full_data_multiplier
         projected = projected_fold + projected_full_data
-        serial_seconds += projected
+        fold_serial_seconds += projected_fold
+        full_data_serial_seconds += projected_full_data
         strata.append(
             {
                 "unit_kind": "fold_fit",
@@ -191,7 +252,11 @@ def build_eta_gate(
                     "projected_serial_hours": projected / 3600.0,
                 }
             )
-    projected_fit_hours = serial_seconds / concurrency / 3600.0
+    projected_fold_hours = fold_serial_seconds / concurrency / 3600.0
+    projected_full_data_hours = (
+        full_data_serial_seconds / aggregation_concurrency / 3600.0
+    )
+    projected_fit_hours = projected_fold_hours + projected_full_data_hours
     projected_dataset_hours = dataset_seconds / 3600.0
     projected_hours = projected_fit_hours + projected_dataset_hours
     guarded_hours = projected_hours * (1.0 + contingency)
@@ -228,6 +293,7 @@ def build_eta_gate(
         "scientific_selection_performed": False,
         "projection_quantile": 0.95,
         "maximum_concurrency": concurrency,
+        "maximum_aggregation_concurrency": aggregation_concurrency,
         "contingency_fraction": contingency,
         "ceiling_hours": ceiling,
         "full_learned_fold_units": full_total,
@@ -244,7 +310,9 @@ def build_eta_gate(
         "pilot_invalid_rows": invalid_pilot_rows,
         "pilot_dataset_failed_rows": dataset_failed_rows,
         "pilot_dataset_invalid_rows": dataset_invalid_rows,
-        "projected_p95_fold_walltime_hours": projected_fit_hours,
+        "projected_p95_fold_walltime_hours": projected_fold_hours,
+        "projected_p95_full_data_fit_walltime_hours": projected_full_data_hours,
+        "projected_p95_estimator_walltime_hours": projected_fit_hours,
         "projected_p95_dataset_walltime_hours": projected_dataset_hours,
         "projected_p95_walltime_hours": projected_hours,
         "guarded_projected_walltime_hours": guarded_hours,
@@ -360,4 +428,4 @@ def _track(family: str) -> str:
         raise ValueError(f"unknown calibration benchmark family {family!r}") from error
 
 
-__all__ = ["TRACK_BY_FAMILY", "build_eta_gate"]
+__all__ = ["TRACK_BY_FAMILY", "build_eta_gate", "eta_execution_limits"]
