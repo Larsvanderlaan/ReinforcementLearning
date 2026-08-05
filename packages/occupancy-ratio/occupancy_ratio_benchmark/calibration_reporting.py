@@ -53,12 +53,14 @@ def build_report(
         raise ValueError("bootstrap_repetitions must be positive")
     manifests = [load_calibration_manifest(root / "manifest.json") for root in roots]
     rows = []
+    failures = []
     statuses = []
     for root, manifest in zip(roots, manifests, strict=True):
         candidate_path = root / "candidate_rows.json"
         if candidate_path.exists():
             payload = json.loads(candidate_path.read_text(encoding="utf-8"))
             rows.extend(payload.get("rows", []))
+            failures.extend(payload.get("failures", []))
         statuses.append(status_payload(manifest=manifest, run_root=root))
     pairs, duplicate_candidates = pair_candidate_rows(rows)
     planned_pairs = int(sum(len(manifest["aggregation_units"]) for manifest in manifests))
@@ -255,6 +257,7 @@ def build_report(
         "planned_pairs": planned_pairs,
         "finite_pairs": finite_pairs,
         "failed_or_missing_pairs": planned_pairs - finite_pairs,
+        "explicit_failure_rows": len(failures),
         "duplicate_candidate_rows": duplicate_candidates,
         "infrastructure": {
             "pass": infrastructure_pass,
@@ -285,6 +288,7 @@ def build_report(
     output.mkdir(parents=True, exist_ok=True)
     _atomic_json(output / "paper_readiness.json", result)
     _write_csv(output / "paired_candidate_deltas.csv", pairs)
+    _write_csv(output / "failed_aggregation_units.csv", failures)
     _write_csv(output / "track_summary.csv", _flatten_track_summaries(track_summaries))
     _write_csv(
         output / "mechanism_summary.csv",
@@ -337,8 +341,8 @@ def pair_candidate_rows(
                 "benchmark_family": family,
                 "track": TRACK_BY_FAMILY[family],
                 "cluster_id": f"{family}|{pava.get('cell_id')}|{pava.get('seed')}",
-                "is_rank_permuted_negative_control": (
-                    pava.get("score_distortion") == "rank_permuted_oracle"
+                "is_reciprocal_negative_control": (
+                    pava.get("score_distortion") == "reciprocal_normalized_oracle"
                 ),
                 "is_learned_estimator": pava.get("score_distortion") is None,
                 "calibration_scalar": _number(
@@ -466,8 +470,8 @@ def _mechanism_summaries(
         ]
         summary: dict[str, Any] = {
             "score_distortion": distortion,
-            "is_rank_permuted_negative_control": distortion
-            == "rank_permuted_oracle",
+            "is_reciprocal_negative_control": distortion
+            == "reciprocal_normalized_oracle",
             "finite_pairs": len(selected),
         }
         for endpoint in (
@@ -545,8 +549,8 @@ def _flatten_mechanism_summaries(
     for row in rows:
         flat = {
             "score_distortion": row["score_distortion"],
-            "is_rank_permuted_negative_control": row[
-                "is_rank_permuted_negative_control"
+            "is_reciprocal_negative_control": row[
+                "is_reciprocal_negative_control"
             ],
             "finite_pairs": row["finite_pairs"],
         }
@@ -612,7 +616,7 @@ def _write_markdown(path: Path, result: Mapping[str, Any]) -> None:
     )
     for row in result["mechanism_summaries"]:
         lines.append(
-            f"| {row['score_distortion']} | {row['is_rank_permuted_negative_control']} | "
+            f"| {row['score_distortion']} | {row['is_reciprocal_negative_control']} | "
             f"{row['finite_pairs']} | {_ci_text(row['calibration_delta'])} | "
             f"{_ci_text(row['value_delta'])} | {_ci_text(row['ratio_mse_delta'])} | "
             f"{_ci_text(row['ratio_kl_delta'])} |"
@@ -620,7 +624,7 @@ def _write_markdown(path: Path, result: Mapping[str, Any]) -> None:
     lines.extend(
         [
             "",
-            "Signed cross-moment estimates are retained. Primary claim gates use learned estimators only. Exact-score mechanisms and the rank-permuted negative control are reported separately. Missing or failed pairs remain in the planned denominator.",
+            "Signed cross-moment estimates are retained. Primary claim gates use learned estimators only. Exact-score mechanisms and the reciprocal negative control are reported separately. Missing or failed pairs remain in the planned denominator.",
         ]
     )
     _atomic_text(path, "\n".join(lines) + "\n")

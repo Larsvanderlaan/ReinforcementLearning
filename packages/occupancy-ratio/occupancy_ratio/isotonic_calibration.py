@@ -52,7 +52,7 @@ class IsotonicCalibrationResult:
     runtime_sec: float
 
     def predict(self, score: Array) -> Array:
-        """Evaluate the fitted right-continuous step map at new scores."""
+        """Evaluate the fitted behavior-knot step map at new scores."""
 
         transformed = _transform_score(_finite_vector(score, "score"), self.config.direction)
         return _predict_step(transformed, self.grid, self.fitted_grid_values)
@@ -318,13 +318,18 @@ def _prepare_inputs(
 
     # The paper's finite optimization class has knots only at observed
     # behavior scores. Successor and initial scores are evaluated through the
-    # same right-continuous step map, with constant endpoint extrapolation.
+    # same paper-defined cells (t_{j-1}, t_j], with constant endpoint
+    # extrapolation.
     # Avoiding target-only knots both matches that definition and reduces each
     # PAVA pass from up to 3n grid points to at most n.
     grid = np.unique(source_z)
     source_index = np.searchsorted(grid, source_z)
-    next_index = np.clip(np.searchsorted(grid, next_z, side="right") - 1, 0, grid.size - 1)
-    initial_index = np.clip(np.searchsorted(grid, initial_z, side="right") - 1, 0, grid.size - 1)
+    next_index = np.clip(
+        np.searchsorted(grid, next_z, side="left"), 0, grid.size - 1
+    )
+    initial_index = np.clip(
+        np.searchsorted(grid, initial_z, side="left"), 0, grid.size - 1
+    )
     source_exposure = np.bincount(source_index, weights=source_prob, minlength=grid.size).astype(np.float64)
     initial_mass = np.bincount(initial_index, weights=initial_prob, minlength=grid.size).astype(np.float64)
     return _PreparedInputs(
@@ -542,7 +547,7 @@ def _predict_step(score: Array, grid: Array, values: Array) -> Array:
     fitted = np.asarray(values, dtype=np.float64).reshape(-1)
     if knots.size == 0 or knots.shape != fitted.shape:
         raise ValueError("grid and values must be nonempty with matching shapes")
-    indices = np.searchsorted(knots, z, side="right") - 1
+    indices = np.searchsorted(knots, z, side="left")
     return fitted[np.clip(indices, 0, knots.size - 1)]
 
 

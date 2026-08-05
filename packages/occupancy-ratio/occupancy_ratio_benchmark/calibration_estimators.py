@@ -57,6 +57,9 @@ class FoldPredictionResult:
     fit_runtime_sec: float
     prediction_runtime_sec: float
     diagnostics: dict[str, Any]
+    source_log_score: Array | None = None
+    next_log_score: Array | None = None
+    initial_log_score: Array | None = None
 
 
 def fit_fold_predictions(
@@ -75,14 +78,13 @@ def fit_fold_predictions(
 ) -> FoldPredictionResult:
     """Fit one frozen baseline and predict q on every cell row.
 
-    Estimator-side normalization is always disabled.  Neural FORE log scores
-    are clamped to the finite range of the fold's held-out current/behavior
-    scores before exponentiation.  The held-out current scores that define the
-    pooled OOF PAVA grid are therefore unchanged whenever they are
-    representable, while successor and initial-law extrapolation remains
-    finite.  This deployable support rule uses neither rewards nor benchmark
-    truth.  DualDICE and minimax learners remain uncapped; their signed critics
-    receive one positive-part projection.
+    Estimator-side normalization is always disabled. Neural FORE retains finite
+    log scores for calibration and separately emits representable native
+    ratios. Every query log score is clamped to the finite range of the fold's
+    held-out current scores, so successor and initial-law extrapolation is
+    finite without discarding log scores below exponentiation range. This rule
+    uses neither rewards nor benchmark truth. DualDICE and minimax learners
+    remain uncapped; their signed critics receive one positive-part projection.
     """
 
     estimator = str(estimator_id)
@@ -143,33 +145,64 @@ def fit_fold_predictions(
         )
 
     prediction_started = time.perf_counter()
-    source_q, source_projection = _predict_q(
-        model,
-        dataset.states,
-        dataset.actions,
-        chunk_size=int(prediction_chunk_size),
-        negative_tolerance=float(negative_tolerance),
-        role="source_q",
-        log_bounds=log_bounds,
-    )
-    next_q, next_projection = _predict_q(
-        model,
-        dataset.next_states,
-        dataset.next_target_actions,
-        chunk_size=int(prediction_chunk_size),
-        negative_tolerance=float(negative_tolerance),
-        role="next_q",
-        log_bounds=log_bounds,
-    )
-    initial_q, initial_projection = _predict_q(
-        model,
-        dataset.initial_states,
-        dataset.initial_actions,
-        chunk_size=int(prediction_chunk_size),
-        negative_tolerance=float(negative_tolerance),
-        role="initial_q",
-        log_bounds=log_bounds,
-    )
+    source_log_score = None
+    next_log_score = None
+    initial_log_score = None
+    if estimator == "neural_fori":
+        if log_bounds is None:
+            raise AssertionError("neural_fori log bounds were not initialized")
+        source_log_score, source_projection = _predict_log_score(
+            model,
+            dataset.states,
+            dataset.actions,
+            chunk_size=int(prediction_chunk_size),
+            role="source_log_score",
+            log_bounds=log_bounds,
+        )
+        next_log_score, next_projection = _predict_log_score(
+            model,
+            dataset.next_states,
+            dataset.next_target_actions,
+            chunk_size=int(prediction_chunk_size),
+            role="next_log_score",
+            log_bounds=log_bounds,
+        )
+        initial_log_score, initial_projection = _predict_log_score(
+            model,
+            dataset.initial_states,
+            dataset.initial_actions,
+            chunk_size=int(prediction_chunk_size),
+            role="initial_log_score",
+            log_bounds=log_bounds,
+        )
+        source_q = _finite_ratio_from_log_score(source_log_score)
+        next_q = _finite_ratio_from_log_score(next_log_score)
+        initial_q = _finite_ratio_from_log_score(initial_log_score)
+    else:
+        source_q, source_projection = _predict_q(
+            model,
+            dataset.states,
+            dataset.actions,
+            chunk_size=int(prediction_chunk_size),
+            negative_tolerance=float(negative_tolerance),
+            role="source_q",
+        )
+        next_q, next_projection = _predict_q(
+            model,
+            dataset.next_states,
+            dataset.next_target_actions,
+            chunk_size=int(prediction_chunk_size),
+            negative_tolerance=float(negative_tolerance),
+            role="next_q",
+        )
+        initial_q, initial_projection = _predict_q(
+            model,
+            dataset.initial_states,
+            dataset.initial_actions,
+            chunk_size=int(prediction_chunk_size),
+            negative_tolerance=float(negative_tolerance),
+            role="initial_q",
+        )
     prediction_runtime = time.perf_counter() - prediction_started
     projection_count = int(
         source_projection["count"] + next_projection["count"] + initial_projection["count"]
@@ -208,6 +241,9 @@ def fit_fold_predictions(
         ),
         "base_prediction_clamp_diagnostics": clamp_diagnostics,
         "base_query_normalization_enabled": False,
+        "calibration_score_space": (
+            "log_ratio" if estimator == "neural_fori" else "ratio"
+        ),
         "negative_projection_count": projection_count,
         "negative_projection_mass": projection_mass,
         "material_negative_projection_count": int(
@@ -244,6 +280,9 @@ def fit_fold_predictions(
         fit_runtime_sec=float(fit_runtime),
         prediction_runtime_sec=float(prediction_runtime),
         diagnostics=diagnostics,
+        source_log_score=source_log_score,
+        next_log_score=next_log_score,
+        initial_log_score=initial_log_score,
     )
 
 
@@ -418,39 +457,22 @@ def _predict_q(
     chunk_size: int,
     negative_tolerance: float,
     role: str,
-    log_bounds: tuple[float, float] | None = None,
 ) -> tuple[Array, dict[str, float | int]]:
     states_array = np.asarray(states)
     actions_array = np.asarray(actions)
     if states_array.shape[0] != actions_array.shape[0]:
         raise ValueError(f"{role} states/actions row mismatch")
     chunks: list[Array] = []
-    lower_clamp_count = 0
-    upper_clamp_count = 0
     for start in range(0, states_array.shape[0], int(chunk_size)):
         stop = min(start + int(chunk_size), states_array.shape[0])
-        if log_bounds is None:
-            prediction = np.asarray(
-                model.predict_state_action_ratio(
-                    states_array[start:stop],
-                    actions_array[start:stop],
-                    clip=False,
-                ),
-                dtype=np.float64,
-            ).reshape(-1)
-        else:
-            lower, upper = log_bounds
-            log_prediction = np.asarray(
-                model.predict_state_action_log_ratio(
-                    states_array[start:stop],
-                    actions_array[start:stop],
-                    clip=False,
-                ),
-                dtype=np.float64,
-            ).reshape(-1)
-            lower_clamp_count += int(np.sum(log_prediction < lower))
-            upper_clamp_count += int(np.sum(log_prediction > upper))
-            prediction = np.exp(np.clip(log_prediction, lower, upper))
+        prediction = np.asarray(
+            model.predict_state_action_ratio(
+                states_array[start:stop],
+                actions_array[start:stop],
+                clip=False,
+            ),
+            dtype=np.float64,
+        ).reshape(-1)
         if prediction.shape[0] != stop - start:
             raise ValueError(f"{role} predictor returned the wrong number of rows")
         chunks.append(prediction)
@@ -472,9 +494,71 @@ def _predict_q(
         "material_count": int(np.sum(material)),
         "tiny_count": int(np.sum(tiny)),
         "minimum": minimum,
+        "lower_clamp_count": 0,
+        "upper_clamp_count": 0,
+    }
+
+
+def _predict_log_score(
+    model: Any,
+    states: Array,
+    actions: Array,
+    *,
+    chunk_size: int,
+    role: str,
+    log_bounds: tuple[float, float],
+) -> tuple[Array, dict[str, float | int]]:
+    """Predict finite KL scores and clamp only to held-out score support."""
+
+    states_array = np.asarray(states)
+    actions_array = np.asarray(actions)
+    if states_array.shape[0] != actions_array.shape[0]:
+        raise ValueError(f"{role} states/actions row mismatch")
+    lower, upper = (float(log_bounds[0]), float(log_bounds[1]))
+    chunks: list[Array] = []
+    lower_clamp_count = 0
+    upper_clamp_count = 0
+    for start in range(0, states_array.shape[0], int(chunk_size)):
+        stop = min(start + int(chunk_size), states_array.shape[0])
+        prediction = np.asarray(
+            model.predict_state_action_log_ratio(
+                states_array[start:stop],
+                actions_array[start:stop],
+                clip=False,
+            ),
+            dtype=np.float64,
+        ).reshape(-1)
+        if prediction.shape[0] != stop - start:
+            raise ValueError(f"{role} predictor returned the wrong number of rows")
+        if np.any(np.isnan(prediction)):
+            raise ValueError(f"{role} contains NaN log scores")
+        lower_clamp_count += int(np.sum(prediction < lower))
+        upper_clamp_count += int(np.sum(prediction > upper))
+        chunks.append(np.clip(prediction, lower, upper))
+    values = np.concatenate(chunks) if chunks else np.empty(0, dtype=np.float64)
+    return values, {
+        "count": 0,
+        "mass": 0.0,
+        "material_count": 0,
+        "tiny_count": 0,
+        "minimum": float(np.min(values)) if values.size else 0.0,
         "lower_clamp_count": lower_clamp_count,
         "upper_clamp_count": upper_clamp_count,
     }
+
+
+def _finite_ratio_from_log_score(log_score: Array) -> Array:
+    """Exponentiate a diagnostic ratio without changing the log score."""
+
+    values = np.asarray(log_score, dtype=np.float64)
+    if not np.all(np.isfinite(values)):
+        raise ValueError("log scores must be finite before exponentiation")
+    lower = float(np.log(np.nextafter(0.0, 1.0)))
+    upper = float(np.nextafter(np.log(np.finfo(np.float64).max), -np.inf))
+    ratio = np.exp(np.clip(values, lower, upper))
+    if not np.all(np.isfinite(ratio)) or np.any(ratio <= 0.0):
+        raise AssertionError("finite clipped log scores must yield positive finite ratios")
+    return ratio
 
 
 def _finite_log_bounds(
@@ -484,7 +568,7 @@ def _finite_log_bounds(
     *,
     chunk_size: int,
 ) -> tuple[tuple[float, float], dict[str, Any]]:
-    """Find the full representable-ratio range on calibration rows."""
+    """Find a finite held-out log-score range without requiring exponentiation."""
 
     log_chunks = []
     states_array = np.asarray(states)
@@ -512,11 +596,11 @@ def _finite_log_bounds(
         & (log_scores >= log_smallest_positive)
         & (log_scores <= log_largest_finite)
     )
-    if not np.any(representable):
-        raise ValueError(
-            "calibration scores contain no representable positive ratios"
-        )
-    distinct_scores = np.unique(log_scores[representable])
+    finite = np.isfinite(log_scores)
+    if not np.any(finite):
+        raise ValueError("calibration scores contain no finite log ratios")
+    support_mask = representable if np.any(representable) else finite
+    distinct_scores = np.unique(log_scores[support_mask])
     lower = float(distinct_scores[0])
     upper = float(distinct_scores[-1])
     return (lower, upper), {
@@ -526,8 +610,11 @@ def _finite_log_bounds(
         "nonfinite_rows": int(np.sum(~np.isfinite(log_scores))),
         "underflow_rows": int(np.sum(log_scores < log_smallest_positive)),
         "overflow_rows": int(np.sum(log_scores > log_largest_finite)),
-        "smallest_positive_ratio": float(np.exp(lower)),
-        "largest_finite_ratio": float(np.exp(upper)),
+        "log_score_fallback_used": bool(not np.any(representable)),
+        "lower_log_score": lower,
+        "upper_log_score": upper,
+        "smallest_positive_ratio": float(_finite_ratio_from_log_score(np.asarray([lower]))[0]),
+        "largest_finite_ratio": float(_finite_ratio_from_log_score(np.asarray([upper]))[0]),
     }
 
 

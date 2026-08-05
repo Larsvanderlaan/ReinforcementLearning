@@ -26,7 +26,7 @@ SCORE_DISTORTIONS = (
     "double_oracle",
     "sqrt_normalized_oracle",
     "q90_clipped_oracle",
-    "rank_permuted_oracle",
+    "reciprocal_normalized_oracle",
 )
 
 
@@ -129,17 +129,24 @@ def _distortion_map(name: str, source_oracle: Array):
     if name == "q90_clipped_oracle":
         threshold = float(np.quantile(source, 0.90))
         return lambda value: np.minimum(np.asarray(value, dtype=np.float64), threshold)
-    ordered = np.sort(source)
-    if ordered.size == 0:
-        raise ValueError("source oracle must be nonempty")
+    positive = source[np.isfinite(source) & (source > 0.0)]
+    if positive.size == 0:
+        raise ValueError("reciprocal control requires a positive source oracle score")
+    lower = float(np.min(positive))
+    upper = float(np.max(positive))
+    source_reciprocal = 1.0 / np.clip(source, lower, upper)
+    scale = float(np.mean(source_reciprocal))
+    if not np.isfinite(scale) or scale <= 0.0:
+        raise ValueError("reciprocal control normalization is not finite")
 
-    def reverse_rank(value: Array) -> Array:
+    def reciprocal_normalized(value: Array) -> Array:
         query = np.asarray(value, dtype=np.float64)
-        rank = np.searchsorted(ordered, query, side="right") - 1
-        reverse = ordered.size - 1 - np.clip(rank, 0, ordered.size - 1)
-        return ordered[reverse]
+        transformed = (1.0 / np.clip(query, lower, upper)) / scale
+        if not np.all(np.isfinite(transformed)) or np.any(transformed <= 0.0):
+            raise ValueError("reciprocal control produced invalid scores")
+        return transformed
 
-    return reverse_rank
+    return reciprocal_normalized
 
 
 def _one_hot_index(value: Array, width: int, name: str) -> Array:

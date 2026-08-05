@@ -173,6 +173,14 @@ def execute_worker(
                 "next_q": result.next_q,
                 "initial_q": result.initial_q,
             }
+            if result.source_log_score is not None:
+                arrays.update(
+                    {
+                        "source_log_score": result.source_log_score,
+                        "next_log_score": result.next_log_score,
+                        "initial_log_score": result.initial_log_score,
+                    }
+                )
             identity = _mapping(unit, "identity")
             axes = _mapping(identity, "axis_values")
             metadata = {
@@ -209,9 +217,16 @@ def execute_worker(
                 "truth_used_for_learned_fit": False,
             }
         elif kind == "pooled_oof_cross_calibration":
-            source_matrix, next_matrix, initial_matrix, fold_runtime, dependency_metadata = (
-                _dependency_matrices(manifest, run_root, unit)
-            )
+            (
+                source_matrix,
+                next_matrix,
+                initial_matrix,
+                source_log_matrix,
+                next_log_matrix,
+                initial_log_matrix,
+                fold_runtime,
+                dependency_metadata,
+            ) = _dependency_matrices(manifest, run_root, unit)
             retry_count = int(
                 sum(int(item.get("attempt", 0)) for item in dependency_metadata)
             )
@@ -224,6 +239,9 @@ def execute_worker(
                 source_q_by_fold=source_matrix,
                 next_q_by_fold=next_matrix,
                 initial_q_by_fold=initial_matrix,
+                source_log_score_by_fold=source_log_matrix,
+                next_log_score_by_fold=next_log_matrix,
+                initial_log_score_by_fold=initial_log_matrix,
                 fold_runtime_sec=fold_runtime,
                 retry_count=retry_count,
                 paths=EstimatorPaths(
@@ -518,14 +536,46 @@ def run_manifest(
 
 def write_flat_rows(*, manifest: Mapping[str, Any], run_root: Path) -> Path:
     rows = []
+    failures = []
     for unit in manifest["aggregation_units"]:
         try:
             payload = read_unit_artifact(run_root=run_root, manifest=manifest, unit=unit)
-        except (ArtifactConflictError, OSError):
+        except (ArtifactConflictError, OSError) as error:
+            identity = _mapping(unit, "identity")
+            axes = _mapping(identity, "axis_values")
+            state_path = run_root / "unit_state" / f"{unit['unit_id']}.json"
+            try:
+                state = json.loads(state_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                state = {}
+            failures.append(
+                {
+                    "unit_id": unit["unit_id"],
+                    "study_id": identity.get("study_id"),
+                    "cell_id": identity.get("cell_id"),
+                    "estimator_id": identity.get("estimator_id"),
+                    "score_distortion": axes.get("score_distortion"),
+                    "sample_size": axes.get("sample_size"),
+                    "gamma": axes.get("gamma"),
+                    "seed": axes.get("seed"),
+                    "status": state.get("status", "missing"),
+                    "failure_type": state.get("failure_type", type(error).__name__),
+                    "error": state.get("error", str(error)),
+                    "attempt": state.get("attempt"),
+                }
+            )
             continue
         rows.extend(payload.get("metadata", {}).get("rows", []))
     path = run_root / "candidate_rows.json"
-    _atomic_json(path, {"rows": rows, "row_count": len(rows)})
+    _atomic_json(
+        path,
+        {
+            "rows": rows,
+            "row_count": len(rows),
+            "failures": failures,
+            "failure_count": len(failures),
+        },
+    )
     if rows:
         columns = sorted({key for row in rows for key in row})
         csv_path = run_root / "candidate_rows.csv"
@@ -616,7 +666,16 @@ def _dependency_matrices(
     manifest: Mapping[str, Any],
     run_root: Path,
     unit: Mapping[str, Any],
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[float], list[dict[str, Any]]]:
+) -> tuple[
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray | None,
+    np.ndarray | None,
+    np.ndarray | None,
+    list[float],
+    list[dict[str, Any]],
+]:
     index = unit_index(manifest)
     dependencies = [index[name] for name in unit["depends_on"]]
     payloads = [
@@ -646,15 +705,44 @@ def _dependency_matrices(
         source = np.stack([arrays[index]["source_q"] for index in order])
         next_q = np.stack([arrays[index]["next_q"] for index in order])
         initial = np.stack([arrays[index]["initial_q"] for index in order])
+        log_presence = ["source_log_score" in arrays[index] for index in order]
+        if any(log_presence) and not all(log_presence):
+            raise ArtifactConflictError(
+                "learned fold dependencies mix ratio and log-score payloads"
+            )
+        if all(log_presence):
+            source_log = np.stack(
+                [arrays[index]["source_log_score"] for index in order]
+            )
+            next_log = np.stack(
+                [arrays[index]["next_log_score"] for index in order]
+            )
+            initial_log = np.stack(
+                [arrays[index]["initial_log_score"] for index in order]
+            )
+        else:
+            source_log = next_log = initial_log = None
         runtimes = [float(payloads[index]["metadata"]["fit_runtime_sec"]) for index in order]
         ordered_payloads = [payloads[index] for index in order]
-        return source, next_q, initial, runtimes, ordered_payloads
+        return (
+            source,
+            next_q,
+            initial,
+            source_log,
+            next_log,
+            initial_log,
+            runtimes,
+            ordered_payloads,
+        )
     if len(arrays) != 1:
         raise ValueError("deterministic aggregation requires exactly one score dependency")
     return (
         arrays[0]["source_q_by_fold"],
         arrays[0]["next_q_by_fold"],
         arrays[0]["initial_q_by_fold"],
+        None,
+        None,
+        None,
         [0.0],
         payloads,
     )

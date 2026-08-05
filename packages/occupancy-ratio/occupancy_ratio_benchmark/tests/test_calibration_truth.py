@@ -51,9 +51,13 @@ def test_oracle_mechanisms_emit_identical_conceptual_folds() -> None:
         assert np.all(result.source_q_by_fold >= 0.0)
     half = oracle_score_matrices(dataset, distortion="half_oracle", num_folds=2)
     assert np.allclose(half.source_q_by_fold[0], 0.5 * dataset.true_ratio)
-    negative = oracle_score_matrices(dataset, distortion="rank_permuted_oracle", num_folds=2)
+    negative = oracle_score_matrices(
+        dataset, distortion="reciprocal_normalized_oracle", num_folds=2
+    )
     order = np.argsort(negative.source_oracle)
     assert np.all(np.diff(negative.source_q_by_fold[0, order]) <= 1e-12)
+    assert np.unique(negative.source_q_by_fold[0]).size > 1
+    assert np.isclose(np.mean(negative.source_q_by_fold[0]), 1.0)
 
 
 def test_floor_sensitivity_is_finite_support_only() -> None:

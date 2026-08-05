@@ -246,6 +246,11 @@ class PooledOOFPredictions:
     initial_weights: Array
     scalar_scale: float
     scalar_source_weight: Array
+    source_score: Array | None = None
+    next_score: Array | None = None
+    initial_score: Array | None = None
+    scalar_log_shift: float | None = None
+    score_space: str = "ratio"
 
 
 @dataclass(frozen=True)
@@ -546,6 +551,9 @@ def fit_cross_calibrated_matrices(
     source_q_by_fold: Array,
     next_q_by_fold: Array,
     initial_q_by_fold: Array,
+    source_log_score_by_fold: Array | None = None,
+    next_log_score_by_fold: Array | None = None,
+    initial_log_score_by_fold: Array | None = None,
     assignment: GroupedFoldAssignment,
     gamma: float,
     source_weights: Array | None = None,
@@ -564,6 +572,11 @@ def fit_cross_calibrated_matrices(
         Matrix with shape ``(K, n)`` on target-successor rows.
     initial_q_by_fold:
         Matrix with shape ``(K, m)`` on target-initial rows.
+    source_log_score_by_fold, next_log_score_by_fold, initial_log_score_by_fold:
+        Optional finite KL log-score matrices. When supplied together, the one
+        pooled PAVA map is fit and evaluated on these scores directly, while
+        native ratios remain available for ratio-error diagnostics. Scalar
+        normalization is computed by weighted log-mean-exp.
     assignment:
         Grouped OOF assignment used to train the fold models. Its diagonal
         entries select the held-out predictions used to fit the calibrator.
@@ -637,15 +650,65 @@ def fit_cross_calibrated_matrices(
         negative_tolerance=float(cfg.negative_tolerance),
     )
 
+    log_inputs = (
+        source_log_score_by_fold,
+        next_log_score_by_fold,
+        initial_log_score_by_fold,
+    )
+    if any(value is not None for value in log_inputs) and not all(
+        value is not None for value in log_inputs
+    ):
+        raise ValueError("all three log-score matrices must be supplied together")
+    uses_log_scores = all(value is not None for value in log_inputs)
+    if uses_log_scores:
+        source_score_matrix = _finite_matrix(
+            source_log_score_by_fold,
+            "source_log_score_by_fold",
+            num_folds=num_folds,
+            num_rows=n_source,
+        )
+        next_score_matrix = _finite_matrix(
+            next_log_score_by_fold,
+            "next_log_score_by_fold",
+            num_folds=num_folds,
+            num_rows=n_source,
+        )
+        initial_score_matrix = _finite_matrix(
+            initial_log_score_by_fold,
+            "initial_log_score_by_fold",
+            num_folds=num_folds,
+            num_rows=n_initial,
+        )
+    else:
+        source_score_matrix = source_matrix
+        next_score_matrix = next_matrix
+        initial_score_matrix = initial_matrix
+
     source_oof = source_matrix[source_fold_ids, np.arange(n_source)]
     next_oof = next_matrix[source_fold_ids, np.arange(n_source)]
     initial_oof = initial_matrix[initial_fold_ids, np.arange(n_initial)]
+    source_score_oof = source_score_matrix[source_fold_ids, np.arange(n_source)]
+    next_score_oof = next_score_matrix[source_fold_ids, np.arange(n_source)]
+    initial_score_oof = initial_score_matrix[initial_fold_ids, np.arange(n_initial)]
     source_probability = _probability_weights(source_weights, "source_weights", n_source)
     initial_probability = _probability_weights(initial_weights, "initial_weights", n_initial)
-    raw_mean = float(np.dot(source_probability, source_oof))
-    if not np.isfinite(raw_mean) or raw_mean <= float(cfg.scalar_mean_floor):
-        raise ValueError("The pooled OOF q predictions have nonpositive or numerically zero source-weighted mean.")
-    scalar_scale = 1.0 / raw_mean
+    scalar_log_shift: float | None = None
+    if uses_log_scores:
+        log_raw_mean = _weighted_log_mean_exp(source_score_oof, source_probability)
+        scalar_log_shift = -log_raw_mean
+        raw_mean = _finite_exp(log_raw_mean)
+        scalar_scale = _finite_exp(scalar_log_shift)
+        scalar_source_weight = _finite_exp_array(
+            source_score_oof + scalar_log_shift
+        )
+    else:
+        raw_mean = float(np.dot(source_probability, source_oof))
+        if not np.isfinite(raw_mean) or raw_mean <= float(cfg.scalar_mean_floor):
+            raise ValueError(
+                "The pooled OOF q predictions have nonpositive or numerically zero source-weighted mean."
+            )
+        scalar_scale = 1.0 / raw_mean
+        scalar_source_weight = scalar_scale * source_oof
     pooled = PooledOOFPredictions(
         source_q=source_oof,
         next_q=next_oof,
@@ -655,12 +718,17 @@ def fit_cross_calibrated_matrices(
         source_weights=source_probability,
         initial_weights=initial_probability,
         scalar_scale=scalar_scale,
-        scalar_source_weight=scalar_scale * source_oof,
+        scalar_source_weight=scalar_source_weight,
+        source_score=source_score_oof,
+        next_score=next_score_oof,
+        initial_score=initial_score_oof,
+        scalar_log_shift=scalar_log_shift,
+        score_space="log_ratio" if uses_log_scores else "ratio",
     )
     calibration_input = PooledCalibrationInput(
-        source_score=source_oof,
-        next_score=next_oof,
-        initial_score=initial_oof,
+        source_score=source_score_oof,
+        next_score=next_score_oof,
+        initial_score=initial_score_oof,
         gamma=gamma_f,
         source_weights=source_probability,
         initial_weights=initial_probability,
@@ -673,26 +741,32 @@ def fit_cross_calibrated_matrices(
 
     source = _matrix_predictions(
         source_matrix,
+        score_by_fold=source_score_matrix,
         scalar_scale=scalar_scale,
+        scalar_log_shift=scalar_log_shift,
         calibrator=calibrator,
         tiny_negative_count=source_negative_count,
         tiny_negative_mass=source_negative_mass,
     )
     next_result = _matrix_predictions(
         next_matrix,
+        score_by_fold=next_score_matrix,
         scalar_scale=scalar_scale,
+        scalar_log_shift=scalar_log_shift,
         calibrator=calibrator,
         tiny_negative_count=next_negative_count,
         tiny_negative_mass=next_negative_mass,
     )
     initial = _matrix_predictions(
         initial_matrix,
+        score_by_fold=initial_score_matrix,
         scalar_scale=scalar_scale,
+        scalar_log_shift=scalar_log_shift,
         calibrator=calibrator,
         tiny_negative_count=initial_negative_count,
         tiny_negative_mass=initial_negative_mass,
     )
-    pava_oof = _predict_calibration(calibrator, source_oof, n_source)
+    pava_oof = _predict_calibration(calibrator, source_score_oof, n_source)
     diagnostics = {
         "algorithm": "grouped_cross_calibration_matrix",
         "occupancy_estimand": "normalized_discounted",
@@ -704,6 +778,8 @@ def fit_cross_calibrated_matrices(
         "pooled_oof_scalar_mean": float(np.dot(source_probability, pooled.scalar_source_weight)),
         "pooled_oof_pava_mean": float(np.dot(source_probability, pava_oof)),
         "scalar_scale": scalar_scale,
+        "scalar_log_shift": scalar_log_shift,
+        "calibration_score_space": "log_ratio" if uses_log_scores else "ratio",
         "tiny_negative_projection_count": int(
             np.sum(source_negative_count) + np.sum(next_negative_count) + np.sum(initial_negative_count)
         ),
@@ -1061,14 +1137,25 @@ def _predict_calibration(calibrator: CalibrationMap, score: Array, n: int) -> Ar
 def _matrix_predictions(
     q_by_fold: Array,
     *,
+    score_by_fold: Array | None = None,
     scalar_scale: float,
+    scalar_log_shift: float | None = None,
     calibrator: CalibrationMap,
     tiny_negative_count: Array,
     tiny_negative_mass: Array,
 ) -> CrossCalibratedPredictions:
     q = np.asarray(q_by_fold, dtype=np.float64)
-    scalar = float(scalar_scale) * q
-    pava = _predict_calibration(calibrator, q.reshape(-1), q.size).reshape(q.shape)
+    score = q if score_by_fold is None else np.asarray(score_by_fold, dtype=np.float64)
+    if score.shape != q.shape or not np.all(np.isfinite(score)):
+        raise ValueError("score_by_fold must be finite and match q_by_fold")
+    scalar = (
+        float(scalar_scale) * q
+        if scalar_log_shift is None
+        else _finite_exp_array(score + float(scalar_log_shift))
+    )
+    pava = _predict_calibration(
+        calibrator, score.reshape(-1), score.size
+    ).reshape(score.shape)
     return CrossCalibratedPredictions(
         raw=np.median(q, axis=0),
         scalar=np.median(scalar, axis=0),
@@ -1079,6 +1166,55 @@ def _matrix_predictions(
         tiny_negative_count_by_fold=np.asarray(tiny_negative_count, dtype=np.int64),
         tiny_negative_mass_by_fold=np.asarray(tiny_negative_mass, dtype=np.float64),
     )
+
+
+def _finite_matrix(
+    value: Array | None,
+    name: str,
+    *,
+    num_folds: int,
+    num_rows: int,
+) -> Array:
+    matrix = np.asarray(value, dtype=np.float64)
+    expected_shape = (int(num_folds), int(num_rows))
+    if matrix.shape != expected_shape:
+        raise ValueError(f"{name} must have shape {expected_shape}; received {matrix.shape}.")
+    if not np.all(np.isfinite(matrix)):
+        raise ValueError(f"{name} must contain only finite values.")
+    return matrix
+
+
+def _weighted_log_mean_exp(log_value: Array, probability: Array) -> float:
+    """Return log(sum_i probability_i exp(log_value_i)) stably."""
+
+    score = np.asarray(log_value, dtype=np.float64).reshape(-1)
+    weight = np.asarray(probability, dtype=np.float64).reshape(-1)
+    if score.shape != weight.shape or score.size == 0:
+        raise ValueError("log values and probabilities must be nonempty and aligned")
+    positive = weight > 0.0
+    if not np.any(positive):
+        raise ValueError("probabilities must have positive mass")
+    maximum = float(np.max(score[positive]))
+    scaled = float(np.dot(weight[positive], np.exp(score[positive] - maximum)))
+    if not np.isfinite(scaled) or scaled <= 0.0:
+        raise ValueError("weighted log-mean-exp normalization failed")
+    return maximum + float(np.log(scaled))
+
+
+def _finite_exp(value: float) -> float:
+    return float(_finite_exp_array(np.asarray([value], dtype=np.float64))[0])
+
+
+def _finite_exp_array(value: Array) -> Array:
+    score = np.asarray(value, dtype=np.float64)
+    if not np.all(np.isfinite(score)):
+        raise ValueError("log-domain values must be finite")
+    lower = float(np.log(np.nextafter(0.0, 1.0)))
+    upper = float(np.nextafter(np.log(np.finfo(np.float64).max), -np.inf))
+    result = np.exp(np.clip(score, lower, upper))
+    if not np.all(np.isfinite(result)) or np.any(result <= 0.0):
+        raise AssertionError("finite clipped log-domain values must exponentiate safely")
+    return result
 
 
 def _q_matrix(

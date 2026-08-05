@@ -181,6 +181,23 @@ def test_log_bounds_keep_full_representable_range() -> None:
     assert diagnostics["representable_distinct_scores"] == 5
 
 
+def test_log_bounds_fall_back_to_finite_scores_below_exp_range() -> None:
+    class ScoreModel:
+        def predict_state_action_log_ratio(self, states, actions, *, clip=True):
+            assert clip is False
+            return np.asarray(states, dtype=np.float64)[:, 0]
+
+    bounds, diagnostics = adapters._finite_log_bounds(
+        ScoreModel(),
+        np.asarray([[-2_000.0], [-1_500.0], [-1_000.0]]),
+        np.zeros((3, 1)),
+        chunk_size=2,
+    )
+    assert bounds == (-2_000.0, -1_000.0)
+    assert diagnostics["representable_positive_rows"] == 0
+    assert diagnostics["log_score_fallback_used"] is True
+
+
 def test_worker_thread_limits_are_forced(monkeypatch) -> None:
     for name in (
         "OMP_NUM_THREADS",

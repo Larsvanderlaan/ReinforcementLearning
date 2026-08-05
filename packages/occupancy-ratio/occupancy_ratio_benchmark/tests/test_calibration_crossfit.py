@@ -232,6 +232,70 @@ def test_matrix_path_selects_oof_diagonal_and_uses_one_common_map() -> None:
     assert result.diagnostics["pooled_calibrator_count"] == 1
 
 
+def test_matrix_path_calibrates_extreme_neural_scores_in_log_space() -> None:
+    sample = _sample()
+    config = CrossCalibrationConfig(num_folds=3, seed=17)
+    assignment = make_grouped_fold_assignment(
+        sample.source_groups,
+        sample.initial_groups,
+        num_folds=3,
+        seed=17,
+    )
+    source_base = -1_500.0 + np.arange(sample.n_source) / 100.0
+    next_base = source_base + 0.01
+    initial_base = -1_500.0 + np.arange(sample.n_initial) / 100.0
+    source_log = np.stack([source_base + fold / 10.0 for fold in range(3)])
+    next_log = np.stack([next_base + fold / 10.0 for fold in range(3)])
+    initial_log = np.stack([initial_base + fold / 10.0 for fold in range(3)])
+    smallest = np.nextafter(0.0, 1.0)
+
+    calls = []
+
+    class ConstantCalibration:
+        def predict(self, score):
+            return np.ones(np.asarray(score).size, dtype=np.float64)
+
+    def fit_calibrator(pooled, config):
+        del config
+        calls.append(pooled)
+        return ConstantCalibration()
+
+    result = fit_cross_calibrated_matrices(
+        source_q_by_fold=np.full(source_log.shape, smallest),
+        next_q_by_fold=np.full(next_log.shape, smallest),
+        initial_q_by_fold=np.full(initial_log.shape, smallest),
+        source_log_score_by_fold=source_log,
+        next_log_score_by_fold=next_log,
+        initial_log_score_by_fold=initial_log,
+        assignment=assignment,
+        gamma=sample.gamma,
+        source_weights=sample.source_weights,
+        initial_weights=sample.initial_weights,
+        config=config,
+        calibrator_fitter=fit_calibrator,
+    )
+
+    source_oof = source_log[
+        assignment.source_fold_ids, np.arange(sample.n_source)
+    ]
+    assert len(calls) == 1
+    np.testing.assert_allclose(calls[0].source_score, source_oof)
+    np.testing.assert_allclose(result.pooled_oof.source_score, source_oof)
+    assert result.pooled_oof.score_space == "log_ratio"
+    assert np.isclose(
+        np.dot(
+            result.pooled_oof.source_weights,
+            result.pooled_oof.scalar_source_weight,
+        ),
+        1.0,
+    )
+    assert np.all(np.isfinite(result.source.scalar_by_fold))
+    assert np.all(result.source.scalar_by_fold > 0.0)
+    np.testing.assert_array_equal(
+        result.source.pava_by_fold, np.ones(source_log.shape)
+    )
+
+
 def test_matrix_path_rejects_material_negative_before_calibration() -> None:
     sample = _sample()
     assignment = make_grouped_fold_assignment(

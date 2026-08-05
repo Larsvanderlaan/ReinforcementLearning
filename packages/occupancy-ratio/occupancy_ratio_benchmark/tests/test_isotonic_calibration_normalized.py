@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from occupancy_ratio import IsotonicCalibrationConfig, fit_isotonic_fori_pava
+from occupancy_ratio.isotonic_calibration import _predict_step
 
 
 def test_normalized_pava_constant_fixed_point() -> None:
@@ -53,6 +54,40 @@ def test_constant_extrapolation_reports_out_of_support_mass() -> None:
     assert float(result.diagnostics["constant_extrapolation_next_fraction"]) > 0.0
     assert float(result.diagnostics["constant_extrapolation_initial_mass"]) > 0.0
     assert np.all(np.isfinite(result.predict(np.array([-100.0, 100.0]))))
+
+
+def test_step_map_uses_paper_behavior_knot_cells() -> None:
+    grid = np.asarray([0.0, 1.0, 2.0])
+    fitted = np.asarray([10.0, 20.0, 30.0])
+    query = np.asarray([-1.0, 0.0, 0.5, 1.0, 1.5, 2.0, 3.0])
+    expected = np.asarray([10.0, 10.0, 20.0, 20.0, 30.0, 30.0, 30.0])
+    np.testing.assert_array_equal(_predict_step(query, grid, fitted), expected)
+
+
+def test_pava_is_stable_for_log_scores_far_below_exp_range() -> None:
+    source = np.repeat(np.arange(4, dtype=np.float64), 20)
+    successor = np.roll(source, 10)
+    initial = np.full(20, 3.0)
+    config = IsotonicCalibrationConfig(num_iterations=500, tolerance=1e-10)
+    ordinary = fit_isotonic_fori_pava(
+        source_score=source,
+        next_score=successor,
+        initial_score=initial,
+        gamma=0.9,
+        config=config,
+    )
+    shifted = fit_isotonic_fori_pava(
+        source_score=source - 300_000.0,
+        next_score=successor - 300_000.0,
+        initial_score=initial - 300_000.0,
+        gamma=0.9,
+        config=config,
+    )
+    assert shifted.status == "ok"
+    np.testing.assert_allclose(
+        shifted.fitted_grid_values, ordinary.fitted_grid_values
+    )
+    np.testing.assert_allclose(shifted.source_weights, ordinary.source_weights)
 
 
 def test_normalized_solver_rejects_stopped_style_no_normalization() -> None:

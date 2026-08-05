@@ -306,8 +306,13 @@ def _candidate_arrays(
 
 def _pooled_basis_arrays(result: CrossCalibratedMatrixResult) -> dict[str, Array]:
     raw = np.asarray(result.pooled_oof.source_q, dtype=np.float64)
-    scalar = float(result.pooled_oof.scalar_scale) * raw
-    pava = np.asarray(result.calibrator.predict(raw), dtype=np.float64).reshape(-1)
+    scalar = np.asarray(result.pooled_oof.scalar_source_weight, dtype=np.float64)
+    score = (
+        raw
+        if result.pooled_oof.source_score is None
+        else np.asarray(result.pooled_oof.source_score, dtype=np.float64)
+    )
+    pava = np.asarray(result.calibrator.predict(score), dtype=np.float64).reshape(-1)
     return {
         "native_pointwise_median": raw,
         "scalar_normalized_pointwise_median": scalar,

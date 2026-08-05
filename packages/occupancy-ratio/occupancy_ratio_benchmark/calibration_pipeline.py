@@ -155,6 +155,9 @@ def execute_aggregation(
     source_q_by_fold: Array,
     next_q_by_fold: Array,
     initial_q_by_fold: Array,
+    source_log_score_by_fold: Array | None = None,
+    next_log_score_by_fold: Array | None = None,
+    initial_log_score_by_fold: Array | None = None,
     fold_runtime_sec: Sequence[float] = (),
     retry_count: int = 0,
     paths: EstimatorPaths | None = None,
@@ -173,6 +176,9 @@ def execute_aggregation(
         source_q_by_fold=source_q_by_fold,
         next_q_by_fold=next_q_by_fold,
         initial_q_by_fold=initial_q_by_fold,
+        source_log_score_by_fold=source_log_score_by_fold,
+        next_log_score_by_fold=next_log_score_by_fold,
+        initial_log_score_by_fold=initial_log_score_by_fold,
         assignment=assignment,
         gamma=float(dataset.gamma),
         initial_weights=dataset.initial_weights,
@@ -259,6 +265,17 @@ def execute_aggregation(
         "pooled_oof_initial_raw": np.asarray(result.pooled_oof.initial_q),
         "scalar_scale": np.asarray([result.pooled_oof.scalar_scale], dtype=np.float64),
     }
+    if result.pooled_oof.score_space == "log_ratio":
+        calibration_arrays.update(
+            {
+                "pooled_oof_source_score": np.asarray(result.pooled_oof.source_score),
+                "pooled_oof_next_score": np.asarray(result.pooled_oof.next_score),
+                "pooled_oof_initial_score": np.asarray(result.pooled_oof.initial_score),
+                "scalar_log_shift": np.asarray(
+                    [result.pooled_oof.scalar_log_shift], dtype=np.float64
+                ),
+            }
+        )
     if hasattr(result.calibrator, "grid") and hasattr(result.calibrator, "fitted_grid_values"):
         calibration_arrays["pava_grid"] = np.asarray(result.calibrator.grid, dtype=np.float64)
         calibration_arrays["pava_fitted_grid_values"] = np.asarray(
