@@ -11,6 +11,7 @@ import numpy as np
 from occupancy_ratio_benchmark.calibration_crossfit import (
     CrossCalibrationConfig,
     GroupedFoldAssignment,
+    apply_fitted_cross_calibration,
     fit_cross_calibrated_matrices,
     make_grouped_fold_assignment,
 )
@@ -58,6 +59,9 @@ def cross_calibration_config(manifest: Mapping[str, Any], *, assignment_seed: in
         pava_direction=str(pava["direction"]),
         pava_fixed_point_damping=float(pava["damping"]),
         pava_support_policy=support_policy,
+        pava_minimum_boundary_block_observations=int(
+            pava.get("minimum_boundary_block_observations", 1)
+        ),
     )
 
 
@@ -67,6 +71,7 @@ def grouped_assignment(
     unit: Mapping[str, Any],
     source_groups: Array,
     initial_groups: Array,
+    audit_dataset: BenchmarkDataset | None = None,
 ) -> GroupedFoldAssignment:
     seed = stable_uint32(dataset_id(unit), "grouped-fold-assignment")
     folds = int(_mapping(_config(manifest), "cross_calibration")["folds"])
@@ -87,6 +92,7 @@ def execute_learned_fold(
     initial_groups: Array,
     paths: EstimatorPaths | None = None,
     prediction_chunk_size: int = 65_536,
+    audit_dataset: BenchmarkDataset | None = None,
 ) -> FoldPredictionResult:
     """Fit exactly one held-out fold and score every dataset row."""
 
@@ -123,6 +129,7 @@ def execute_learned_fold(
         paths=paths,
         calibration_source_indices=source_calibration,
         prediction_chunk_size=int(prediction_chunk_size),
+        audit_dataset=audit_dataset,
     )
 
 
@@ -131,6 +138,7 @@ def execute_deterministic_score(
     manifest: Mapping[str, Any],
     unit: Mapping[str, Any],
     dataset: BenchmarkDataset,
+    audit_dataset: BenchmarkDataset | None = None,
 ) -> OracleScoreMatrices:
     """Create one deterministic oracle-distortion score artifact."""
 
@@ -142,7 +150,12 @@ def execute_deterministic_score(
     folds = int(_mapping(_config(manifest), "cross_calibration")["folds"])
     if int(unit.get("conceptual_fold_count", -1)) != folds:
         raise ValueError("deterministic conceptual fold count has drifted")
-    return oracle_score_matrices(dataset, distortion=distortion, num_folds=folds)
+    return oracle_score_matrices(
+        dataset,
+        distortion=distortion,
+        num_folds=folds,
+        audit_dataset=audit_dataset,
+    )
 
 
 def execute_aggregation(
@@ -161,8 +174,26 @@ def execute_aggregation(
     fold_runtime_sec: Sequence[float] = (),
     retry_count: int = 0,
     paths: EstimatorPaths | None = None,
+    cached_full_data_predictions: Mapping[str, Array] | None = None,
+    cached_full_data_fit_runtime_sec: float | None = None,
+    cached_full_data_fit_diagnostics: Mapping[str, Any] | None = None,
+    audit_dataset: BenchmarkDataset | None = None,
+    audit_source_groups: Array | None = None,
+    audit_initial_groups: Array | None = None,
+    audit_source_q_by_fold: Array | None = None,
+    audit_next_q_by_fold: Array | None = None,
+    audit_initial_q_by_fold: Array | None = None,
+    audit_source_log_score_by_fold: Array | None = None,
+    audit_next_log_score_by_fold: Array | None = None,
+    audit_initial_log_score_by_fold: Array | None = None,
+    cached_full_data_audit_predictions: Mapping[str, Array] | None = None,
 ) -> AggregationOutput:
-    """Fit one pooled OOF map, apply it foldwise, median, and evaluate."""
+    """Fit one pooled OOF map, apply it foldwise, median, and evaluate.
+
+    Previously frozen full-data predictions may be supplied when reaggregating
+    a calibration map. This avoids retraining the comparison arm and preserves
+    its original provenance.
+    """
 
     started = time.perf_counter()
     assignment = grouped_assignment(
@@ -184,6 +215,38 @@ def execute_aggregation(
         initial_weights=dataset.initial_weights,
         config=config,
     )
+    audit_inputs = (
+        audit_source_q_by_fold,
+        audit_next_q_by_fold,
+        audit_initial_q_by_fold,
+    )
+    if any(value is not None for value in audit_inputs) and not all(
+        value is not None for value in audit_inputs
+    ):
+        raise ValueError("all three audit fold-prediction matrices are required")
+    audit_candidate_predictions: dict[str, dict[str, Array]] | None = None
+    if all(value is not None for value in audit_inputs):
+        audit_source, audit_next, audit_initial = apply_fitted_cross_calibration(
+            result,
+            source_q_by_fold=audit_source_q_by_fold,
+            next_q_by_fold=audit_next_q_by_fold,
+            initial_q_by_fold=audit_initial_q_by_fold,
+            source_log_score_by_fold=audit_source_log_score_by_fold,
+            next_log_score_by_fold=audit_next_log_score_by_fold,
+            initial_log_score_by_fold=audit_initial_log_score_by_fold,
+        )
+        audit_candidate_predictions = {
+            candidate_id: {
+                "current": getattr(audit_source, role),
+                "next": getattr(audit_next, role),
+                "initial": getattr(audit_initial, role),
+            }
+            for candidate_id, role in (
+                ("native_pointwise_median", "raw"),
+                ("scalar_normalized_pointwise_median", "scalar"),
+                ("pava_pointwise_median", "pava"),
+            )
+        }
     calibrator_status = str(getattr(result.calibrator, "status", "unknown"))
     calibrator_diagnostics = dict(getattr(result.calibrator, "diagnostics", {}))
     if calibrator_status != "ok" or calibrator_diagnostics.get("converged") is not True:
@@ -196,11 +259,40 @@ def execute_aggregation(
     axes = _mapping(_mapping(unit, "identity"), "axis_values")
     estimator_id = str(_mapping(unit, "identity")["estimator_id"])
     full_data_result: FoldPredictionResult | None = None
+    full_data_predictions = (
+        None
+        if cached_full_data_predictions is None
+        else {
+            role: np.asarray(cached_full_data_predictions[role])
+            for role in ("current", "next", "initial")
+        }
+    )
+    full_data_runtime = (
+        None
+        if cached_full_data_fit_runtime_sec is None
+        else float(cached_full_data_fit_runtime_sec)
+    )
+    full_data_diagnostics = (
+        None
+        if cached_full_data_fit_diagnostics is None
+        else dict(cached_full_data_fit_diagnostics)
+    )
+    full_data_audit_predictions = (
+        None
+        if cached_full_data_audit_predictions is None
+        else {
+            role: np.asarray(cached_full_data_audit_predictions[role])
+            for role in ("current", "next", "initial")
+        }
+    )
     registry_entry = _mapping(
         _mapping(_config(manifest), "estimator_registry"),
         estimator_id,
     )
-    if registry_entry.get("crossfit_base_fit_required") is True:
+    if (
+        registry_entry.get("crossfit_base_fit_required") is True
+        and full_data_predictions is None
+    ):
         full_data_result = fit_fold_predictions(
             estimator_id=estimator_id,
             dataset=dataset,
@@ -218,7 +310,21 @@ def execute_aggregation(
             registry_entry=registry_entry,
             paths=paths,
             calibration_source_indices=np.arange(dataset.n, dtype=np.int64),
+            audit_dataset=audit_dataset,
         )
+        full_data_predictions = {
+            "current": full_data_result.source_q,
+            "next": full_data_result.next_q,
+            "initial": full_data_result.initial_q,
+        }
+        full_data_runtime = float(full_data_result.fit_runtime_sec)
+        full_data_diagnostics = dict(full_data_result.diagnostics)
+        if full_data_result.audit_source_q is not None:
+            full_data_audit_predictions = {
+                "current": full_data_result.audit_source_q,
+                "next": full_data_result.audit_next_q,
+                "initial": full_data_result.audit_initial_q,
+            }
     rows, arrays = evaluate_cross_calibrated_result(
         dataset=dataset,
         result=result,
@@ -232,20 +338,13 @@ def execute_aggregation(
         fold_runtime_sec=fold_runtime_sec,
         aggregation_runtime_sec=runtime,
         retry_count=int(retry_count),
-        full_data_predictions=(
-            None
-            if full_data_result is None
-            else {
-                "current": full_data_result.source_q,
-                "next": full_data_result.next_q,
-                "initial": full_data_result.initial_q,
-            }
-        ),
-        full_data_fit_runtime_sec=(
-            None
-            if full_data_result is None
-            else full_data_result.fit_runtime_sec
-        ),
+        full_data_predictions=full_data_predictions,
+        full_data_fit_runtime_sec=full_data_runtime,
+        audit_dataset=audit_dataset,
+        audit_source_groups=audit_source_groups,
+        audit_initial_groups=audit_initial_groups,
+        audit_candidate_predictions=audit_candidate_predictions,
+        full_data_audit_predictions=full_data_audit_predictions,
     )
     diagnostics = {
         **result.diagnostics,
@@ -253,11 +352,8 @@ def execute_aggregation(
         "pava_diagnostics": calibrator_diagnostics,
         "aggregation_runtime_sec": runtime,
         "dependency_count": len(unit.get("depends_on", [])),
-        "full_data_fit_diagnostics": (
-            None
-            if full_data_result is None
-            else full_data_result.diagnostics
-        ),
+        "full_data_fit_diagnostics": full_data_diagnostics,
+        "independent_behavior_audit": audit_dataset is not None,
     }
     calibration_arrays = {
         "pooled_oof_source_raw": np.asarray(result.pooled_oof.source_q),
@@ -281,6 +377,13 @@ def execute_aggregation(
         calibration_arrays["pava_fitted_grid_values"] = np.asarray(
             result.calibrator.fitted_grid_values, dtype=np.float64
         )
+    if audit_candidate_predictions is not None:
+        for candidate_id, values in audit_candidate_predictions.items():
+            for role, value in values.items():
+                calibration_arrays[f"audit_candidate__{candidate_id}__{role}"] = np.asarray(value)
+    if full_data_audit_predictions is not None:
+        for role, value in full_data_audit_predictions.items():
+            calibration_arrays[f"audit_candidate__full_data_raw__{role}"] = np.asarray(value)
     return AggregationOutput(
         rows=tuple(rows),
         candidate_arrays=arrays,

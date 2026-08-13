@@ -35,6 +35,7 @@ class IsotonicCalibrationConfig:
     initialization: Initialization = "unit"
     support_tol: float = 1e-12
     support_policy: SupportPolicy = "constant_extrapolation"
+    minimum_boundary_block_observations: int = 1
 
 
 @dataclass(frozen=True)
@@ -73,6 +74,7 @@ class _PreparedInputs:
     next_grid_index: Array
     initial_grid_index: Array
     source_exposure: Array
+    source_observation_count: Array
     initial_mass: Array
     gamma: float
     extrapolated_next_fraction: float
@@ -84,6 +86,7 @@ class _GridFit:
     grid: Array
     exposure: Array
     target: Array
+    observation_count: Array
 
 
 def fit_isotonic_fori_pava(
@@ -169,6 +172,9 @@ def fit_isotonic_fori_pava(
                 relative_change=relative_change,
                 floor_fraction=max(floor_fraction, damped_floor_fraction),
                 support_tol=cfg.support_tol,
+                required_minimum_boundary_block_observations=(
+                    cfg.minimum_boundary_block_observations
+                ),
             )
         )
         omega = updated
@@ -209,13 +215,67 @@ def fit_isotonic_fori_pava(
                 relative_change=_relative_change(previous_omega, omega, arrays.source_weight),
                 floor_fraction=floor_fraction,
                 support_tol=cfg.support_tol,
+                required_minimum_boundary_block_observations=(
+                    cfg.minimum_boundary_block_observations
+                ),
                 final_projection=True,
             )
         )
 
+    # Boundary support is deployment regularization, not part of the fitted
+    # fixed-point recursion.  Fit the paper's ordinary PAVA fixed point first,
+    # then coarsen only undersupported endpoint blocks once.  Each adjacent
+    # merge uses the pooled target/exposure ratio, so monotonicity, total mass,
+    # and block balance on the coarsened endpoint partition are preserved.
+    if cfg.minimum_boundary_block_observations > 1:
+        previous_omega = omega.copy()
+        ordinary_diagnostics = dict(history[-1])
+        ordinary_history_count = len(history)
+        final_values = _pool_small_boundary_pava_blocks(
+            final_values,
+            final_fit.exposure,
+            final_fit.target,
+            observation_count=final_fit.observation_count,
+            minimum_boundary_block_observations=(
+                cfg.minimum_boundary_block_observations
+            ),
+            support_tol=cfg.support_tol,
+        )
+        final_values, floor_fraction = _floor_and_normalize(
+            final_values,
+            final_fit.exposure,
+            positivity_floor=cfg.positivity_floor,
+            normalize=True,
+            zero_tol=cfg.support_tol,
+        )
+        omega = _predict_step(arrays.source_score, final_fit.grid, final_values)
+        postprocess_diagnostics = _diagnostics(
+            arrays,
+            final_fit,
+            final_values,
+            omega,
+            iteration=int(ordinary_diagnostics["iteration"]),
+            relative_change=float(ordinary_diagnostics["relative_change"]),
+            floor_fraction=floor_fraction,
+            support_tol=cfg.support_tol,
+            required_minimum_boundary_block_observations=(
+                cfg.minimum_boundary_block_observations
+            ),
+            final_projection=True,
+        )
+        postprocess_diagnostics["post_pava_boundary_pooling"] = True
+        postprocess_diagnostics["post_pava_boundary_pooling_relative_change"] = (
+            _relative_change(previous_omega, omega, arrays.source_weight)
+        )
+        postprocess_diagnostics["ordinary_pava_diagnostic_records"] = (
+            ordinary_history_count
+        )
+        history.append(postprocess_diagnostics)
+
     final_diag = dict(history[-1])
     final_diag["converged"] = loop_converged
-    final_diag["iterations"] = len(history)
+    final_diag["iterations"] = int(final_diag["iteration"])
+    final_diag["diagnostic_records"] = len(history)
     return IsotonicCalibrationResult(
         method="pava",
         status="ok" if loop_converged else "max_iterations",
@@ -257,6 +317,15 @@ def _validate_config(config: IsotonicCalibrationConfig | None) -> IsotonicCalibr
         raise ValueError("fixed_point_damping must be in (0, 1]")
     if not np.isfinite(cfg.support_tol) or cfg.support_tol < 0.0:
         raise ValueError("support_tol must be finite and nonnegative")
+    if (
+        isinstance(cfg.minimum_boundary_block_observations, bool)
+        or int(cfg.minimum_boundary_block_observations)
+        != cfg.minimum_boundary_block_observations
+        or int(cfg.minimum_boundary_block_observations) <= 0
+    ):
+        raise ValueError(
+            "minimum_boundary_block_observations must be a positive integer"
+        )
     return cfg
 
 
@@ -331,6 +400,7 @@ def _prepare_inputs(
         np.searchsorted(grid, initial_z, side="left"), 0, grid.size - 1
     )
     source_exposure = np.bincount(source_index, weights=source_prob, minlength=grid.size).astype(np.float64)
+    source_observation_count = np.bincount(source_index, minlength=grid.size).astype(np.int64)
     initial_mass = np.bincount(initial_index, weights=initial_prob, minlength=grid.size).astype(np.float64)
     return _PreparedInputs(
         source_score_raw=source_raw,
@@ -346,6 +416,7 @@ def _prepare_inputs(
         next_grid_index=next_index,
         initial_grid_index=initial_index,
         source_exposure=source_exposure,
+        source_observation_count=source_observation_count,
         initial_mass=initial_mass,
         gamma=gamma_f,
         extrapolated_next_fraction=float(np.mean(next_outside)) if next_outside.size else 0.0,
@@ -393,7 +464,12 @@ def _build_grid_fit(arrays: _PreparedInputs, omega: Array, *, support_tol: float
     ).astype(np.float64)
     target = (1.0 - arrays.gamma) * arrays.initial_mass + arrays.gamma * successor_mass
     _raise_if_unbounded(arrays.source_exposure, target, arrays.grid, support_tol=support_tol)
-    return _GridFit(arrays.grid, arrays.source_exposure, target)
+    return _GridFit(
+        arrays.grid,
+        arrays.source_exposure,
+        target,
+        arrays.source_observation_count,
+    )
 
 
 def _solve_generalized_pava(
@@ -422,7 +498,7 @@ def _solve_generalized_pava(
         except ImportError:
             pass
         else:
-            return np.asarray(
+            values = np.asarray(
                 isotonic_regression(
                     b / a,
                     sample_weight=a,
@@ -430,6 +506,7 @@ def _solve_generalized_pava(
                 ),
                 dtype=np.float64,
             )
+            return values
     blocks: list[list[float | int]] = []
     for index, (a_value, b_value) in enumerate(zip(a, b, strict=True)):
         a_mass = float(a_value)
@@ -447,6 +524,96 @@ def _solve_generalized_pava(
     for start, stop, _, _, value in blocks:
         values[int(start) : int(stop)] = float(value)
     return values
+
+
+def _pool_small_boundary_pava_blocks(
+    values: Array,
+    exposure: Array,
+    target: Array,
+    *,
+    observation_count: Array | None,
+    minimum_boundary_block_observations: int,
+    support_tol: float,
+) -> Array:
+    """Pool only undersupported endpoint blocks into their neighbors."""
+
+    minimum = int(minimum_boundary_block_observations)
+    fitted = np.asarray(values, dtype=np.float64).reshape(-1)
+    if minimum <= 1:
+        return fitted
+    if observation_count is None:
+        raise ValueError(
+            "observation_count is required when minimum_boundary_block_observations exceeds one"
+        )
+    counts = np.asarray(observation_count, dtype=np.int64).reshape(-1)
+    a = np.asarray(exposure, dtype=np.float64).reshape(-1)
+    b = np.asarray(target, dtype=np.float64).reshape(-1)
+    if not (fitted.shape == counts.shape == a.shape == b.shape):
+        raise ValueError("PAVA values, masses, and observation counts must have matching shapes")
+    if np.any(counts < 0):
+        raise ValueError("observation_count must be nonnegative")
+    if int(np.sum(counts)) < minimum:
+        raise ValueError(
+            "minimum_boundary_block_observations cannot exceed the source sample size"
+        )
+
+    boundaries = np.concatenate(
+        ([0], np.flatnonzero(np.abs(np.diff(fitted)) > _ORDER_TOL) + 1, [fitted.size])
+    )
+    blocks: list[list[float | int]] = []
+    for start, stop in zip(boundaries[:-1], boundaries[1:], strict=True):
+        start_i = int(start)
+        stop_i = int(stop)
+        a_mass = float(np.sum(a[start_i:stop_i]))
+        b_mass = float(np.sum(b[start_i:stop_i]))
+        blocks.append(
+            [
+                start_i,
+                stop_i,
+                a_mass,
+                b_mass,
+                int(np.sum(counts[start_i:stop_i])),
+                _block_value(a_mass, b_mass, support_tol=support_tol),
+            ]
+        )
+
+    while len(blocks) > 1 and int(blocks[0][4]) < minimum:
+        blocks[:2] = [
+            _merge_pava_blocks(blocks[0], blocks[1], support_tol=support_tol)
+        ]
+    while len(blocks) > 1 and int(blocks[-1][4]) < minimum:
+        blocks[-2:] = [
+            _merge_pava_blocks(blocks[-2], blocks[-1], support_tol=support_tol)
+        ]
+
+    pooled = np.empty_like(fitted)
+    for start, stop, _, _, _, value in blocks:
+        pooled[int(start) : int(stop)] = float(value)
+    return pooled
+
+
+def _block_value(a_mass: float, b_mass: float, *, support_tol: float) -> float:
+    if a_mass <= support_tol:
+        return np.inf if b_mass > support_tol else 0.0
+    return b_mass / a_mass
+
+
+def _merge_pava_blocks(
+    left: list[float | int],
+    right: list[float | int],
+    *,
+    support_tol: float,
+) -> list[float | int]:
+    a_mass = float(left[2]) + float(right[2])
+    b_mass = float(left[3]) + float(right[3])
+    return [
+        int(left[0]),
+        int(right[1]),
+        a_mass,
+        b_mass,
+        int(left[4]) + int(right[4]),
+        _block_value(a_mass, b_mass, support_tol=support_tol),
+    ]
 
 
 def _raise_if_unbounded(exposure: Array, target: Array, grid: Array, *, support_tol: float) -> None:
@@ -497,6 +664,7 @@ def _diagnostics(
     relative_change: float,
     floor_fraction: float,
     support_tol: float,
+    required_minimum_boundary_block_observations: int,
     final_projection: bool = False,
 ) -> dict[str, float | int | str | bool]:
     differences = np.diff(values)
@@ -512,6 +680,14 @@ def _diagnostics(
             start = stop
     positive = source_weights[source_weights > 0.0]
     median = float(np.median(positive)) if positive.size else 0.0
+    fitted_block_counts: list[int] = []
+    start = 0
+    for stop in range(1, values.size + 1):
+        if stop == values.size or abs(float(values[stop]) - float(values[start])) > _ORDER_TOL:
+            fitted_block_counts.append(
+                int(np.sum(arrays.source_observation_count[start:stop]))
+            )
+            start = stop
     return {
         "method": "pava",
         "estimand": "normalized_discounted",
@@ -521,6 +697,18 @@ def _diagnostics(
         "normalization_error": source_mass - 1.0,
         "grid_size": int(values.size),
         "num_blocks": int(1 + np.sum(np.abs(differences) > _ORDER_TOL)),
+        "left_boundary_block_observations": int(
+            fitted_block_counts[0] if fitted_block_counts else 0
+        ),
+        "right_boundary_block_observations": int(
+            fitted_block_counts[-1] if fitted_block_counts else 0
+        ),
+        "minimum_fitted_block_observations": int(
+            min(fitted_block_counts) if fitted_block_counts else 0
+        ),
+        "required_minimum_boundary_block_observations": int(
+            required_minimum_boundary_block_observations
+        ),
         "monotone_violations": int(np.sum(differences < -1e-10)),
         "monotone_min_diff": float(np.min(differences)) if differences.size else 0.0,
         "block_balance_max_abs": float(np.max(np.abs(residuals))) if residuals else 0.0,

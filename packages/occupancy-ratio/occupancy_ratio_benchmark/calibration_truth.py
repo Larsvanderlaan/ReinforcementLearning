@@ -41,6 +41,9 @@ class OracleScoreMatrices:
     next_oracle: Array
     initial_oracle: Array
     distortion: str
+    audit_source_q_by_fold: Array | None = None
+    audit_next_q_by_fold: Array | None = None
+    audit_initial_q_by_fold: Array | None = None
 
 
 def exact_ratio_at(dataset: BenchmarkDataset, states: Array, actions: Array) -> Array:
@@ -83,6 +86,7 @@ def oracle_score_matrices(
     *,
     distortion: str,
     num_folds: int,
+    audit_dataset: BenchmarkDataset | None = None,
 ) -> OracleScoreMatrices:
     """Construct a predeclared exact-ratio mechanism without fitting a model."""
 
@@ -98,6 +102,36 @@ def oracle_score_matrices(
     source_q = transform(source)
     next_q = transform(next_ratio)
     initial_q = transform(initial)
+    audit_source_q_by_fold = None
+    audit_next_q_by_fold = None
+    audit_initial_q_by_fold = None
+    if audit_dataset is not None:
+        audit_source = transform(
+            exact_ratio_at(audit_dataset, audit_dataset.states, audit_dataset.actions)
+        )
+        audit_next = transform(
+            exact_ratio_at(
+                audit_dataset,
+                audit_dataset.next_states,
+                audit_dataset.next_target_actions,
+            )
+        )
+        audit_initial = transform(
+            exact_ratio_at(
+                audit_dataset,
+                audit_dataset.initial_states,
+                audit_dataset.initial_actions,
+            )
+        )
+        audit_source_q_by_fold = np.repeat(
+            audit_source[None, :], int(num_folds), axis=0
+        )
+        audit_next_q_by_fold = np.repeat(
+            audit_next[None, :], int(num_folds), axis=0
+        )
+        audit_initial_q_by_fold = np.repeat(
+            audit_initial[None, :], int(num_folds), axis=0
+        )
     return OracleScoreMatrices(
         source_q_by_fold=np.repeat(source_q[None, :], int(num_folds), axis=0),
         next_q_by_fold=np.repeat(next_q[None, :], int(num_folds), axis=0),
@@ -106,6 +140,9 @@ def oracle_score_matrices(
         next_oracle=next_ratio,
         initial_oracle=initial,
         distortion=name,
+        audit_source_q_by_fold=audit_source_q_by_fold,
+        audit_next_q_by_fold=audit_next_q_by_fold,
+        audit_initial_q_by_fold=audit_initial_q_by_fold,
     )
 
 

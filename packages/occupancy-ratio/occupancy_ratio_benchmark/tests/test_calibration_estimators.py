@@ -164,6 +164,68 @@ def test_neural_fori_clamps_extrapolated_log_scores_to_current_support(monkeypat
     )
 
 
+def test_neural_fori_audit_scores_reuse_training_held_out_bounds(monkeypatch) -> None:
+    dataset = make_discrete_dataset(
+        setting="random_tabular_mdp",
+        gamma=0.9,
+        sample_size=30,
+        seed=7,
+        n_states=6,
+        n_actions=2,
+    )
+    audit = make_discrete_dataset(
+        setting="random_tabular_mdp",
+        gamma=0.9,
+        sample_size=17,
+        seed=7,
+        sample_seed=88,
+        n_states=6,
+        n_actions=2,
+    )
+    audit.states = np.full_like(audit.states, 100.0)
+    audit.next_states = np.full_like(audit.next_states, -100.0)
+    audit.initial_states = np.full_like(audit.initial_states, 50.0)
+
+    class StateScoreModel(_PositiveModel):
+        def predict_state_action_log_ratio(self, states, actions, *, clip=True):
+            del actions
+            assert clip is False
+            return np.asarray(states, dtype=np.float64)[:, 0]
+
+    monkeypatch.setattr(
+        adapters,
+        "fit_kl_fori_neural",
+        lambda **kwargs: StateScoreModel(),
+    )
+    held_out = np.arange(20, 30)
+    result = adapters.fit_fold_predictions(
+        estimator_id="neural_fori",
+        dataset=dataset,
+        train_source_indices=np.arange(20),
+        train_initial_indices=np.arange(80),
+        calibration_source_indices=held_out,
+        fold_index=0,
+        fit_seed=0,
+        registry_entry={
+            "schedule": {
+                "outer_iterations": 1,
+                "variational_steps": 1,
+                "prediction_clamp": adapters.NEURAL_FORI_PREDICTION_CLAMP,
+            }
+        },
+        audit_dataset=audit,
+    )
+
+    expected_lower = float(np.min(dataset.states[held_out, 0]))
+    expected_upper = float(np.max(dataset.states[held_out, 0]))
+    np.testing.assert_allclose(result.audit_source_log_score, expected_upper)
+    np.testing.assert_allclose(result.audit_next_log_score, expected_lower)
+    np.testing.assert_allclose(result.audit_initial_log_score, expected_upper)
+    assert result.diagnostics["independent_audit_scored"] is True
+    assert result.diagnostics["independent_audit_used_for_fit"] is False
+    assert result.diagnostics["independent_audit_used_for_clamp"] is False
+
+
 def test_log_bounds_keep_full_representable_range() -> None:
     class ScoreModel:
         def predict_state_action_log_ratio(self, states, actions, *, clip=True):

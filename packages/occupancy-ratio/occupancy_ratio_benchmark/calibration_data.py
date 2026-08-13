@@ -107,6 +107,7 @@ def build_calibration_dataset(
         )
 
         def build(rollouts: int) -> BenchmarkDataset:
+            audit = _independent_audit_config(resolved_config)
             return make_d4rl_ope_dataset(
                 policy_id=str(_required(cell, "policy_id")),
                 gamma=gamma,
@@ -117,6 +118,9 @@ def build_calibration_dataset(
                 target_value_rollouts=int(rollouts),
                 target_occupancy_trajectories_per_pool=target_occupancy_trajectories_per_pool,
                 require_exact_rollout_env=True,
+                behavior_episode_partition="train" if audit["enabled"] else "all",
+                behavior_audit_fraction=float(audit["d4rl_raw_episode_fraction"]),
+                behavior_partition_seed=int(audit["partition_seed"]),
             )
 
         dataset, truth_stages = _adaptive_truth_dataset(build, truth)
@@ -176,6 +180,195 @@ def build_calibration_dataset(
         initial_groups=initial_groups,
         truth_stages=truth_stages,
     )
+
+
+def build_calibration_audit_dataset(
+    *,
+    cell: Mapping[str, Any],
+    axis_values: Mapping[str, Any],
+    resolved_config: Mapping[str, Any],
+    paths: DatasetPaths,
+) -> CalibrationDatasetBundle:
+    """Build behavior data excluded from every estimator and calibrator fit."""
+
+    audit = _independent_audit_config(resolved_config)
+    if not audit["enabled"]:
+        raise ValueError("independent behavior audit is not enabled")
+    family = str(_required(cell, "benchmark_family"))
+    sample_size = _positive_int(_required(axis_values, "sample_size"), "sample_size")
+    seed = _integer(_required(axis_values, "seed"), "seed")
+    gamma = float(_required(axis_values, "gamma"))
+    audit_seed = _audit_seed(
+        config_id=str(_required(resolved_config, "config_id")),
+        cell_id=str(_required(cell, "cell_id")),
+        sample_size=sample_size,
+        gamma=gamma,
+        seed=seed,
+        salt=int(audit["sample_seed_salt"]),
+    )
+    if family == "random_tabular":
+        dataset = make_discrete_dataset(
+            setting="random_tabular_mdp",
+            gamma=gamma,
+            sample_size=sample_size,
+            seed=seed,
+            sample_seed=audit_seed,
+            policy_shift=float(_required(cell, "policy_shift")),
+            n_states=_positive_int(_required(cell, "states"), "cell.states"),
+            n_actions=_positive_int(_required(cell, "actions"), "cell.actions"),
+        )
+    elif family == "linear_gaussian":
+        dataset = make_linear_gaussian_dataset(
+            gamma=gamma,
+            sample_size=sample_size,
+            seed=seed,
+            sample_seed=audit_seed,
+            policy_shift=float(_required(cell, "policy_shift")),
+        )
+    elif family == "d4rl_matched":
+        from occupancy_ratio_benchmark.d4rl_ope import make_d4rl_ope_dataset  # noqa: PLC0415
+
+        dataset = make_d4rl_ope_dataset(
+            policy_id=str(_required(cell, "policy_id")),
+            gamma=gamma,
+            sample_size=sample_size,
+            seed=audit_seed,
+            asset_cache_dir=paths.asset_cache,
+            install_assets=bool(paths.install_assets),
+            target_value_rollouts=1,
+            target_occupancy_trajectories_per_pool=0,
+            require_exact_rollout_env=False,
+            behavior_episode_partition="audit",
+            behavior_audit_fraction=float(audit["d4rl_raw_episode_fraction"]),
+            behavior_partition_seed=int(audit["partition_seed"]),
+            include_target_evaluation=False,
+        )
+    elif family == "dice_rl_cartpole":
+        from occupancy_ratio_benchmark.dice_rl_repro import (  # noqa: PLC0415
+            make_dice_rl_reproduction_dataset,
+        )
+
+        collection = _mapping(resolved_config, "collection")
+        behavior_alpha = float(_required(cell, "behavior_alpha"))
+        dataset = make_dice_rl_reproduction_dataset(
+            setting="dice_rl_cartpole",
+            dataset_variant=f"alpha={behavior_alpha:g}",
+            gamma=gamma,
+            sample_size=sample_size,
+            seed=audit_seed,
+            dice_rl_repo_path=paths.dice_rl,
+            asset_cache_dir=paths.asset_cache,
+            install_assets=bool(paths.install_assets),
+            num_trajectories=_positive_int(
+                _required(collection, "trajectories"), "collection.trajectories"
+            ),
+            max_trajectory_length=_positive_int(
+                _required(collection, "horizon"), "collection.horizon"
+            ),
+            target_value_rollouts=1,
+            target_occupancy_trajectories_per_pool=0,
+            collection_batch_size=20,
+            include_target_evaluation=False,
+        )
+    else:
+        raise ValueError(f"unsupported calibration benchmark_family {family!r}")
+
+    validate_normalized_dataset(dataset)
+    source_groups, initial_groups = independent_audit_group_ids(dataset)
+    dataset.metadata = {
+        **dataset.metadata,
+        "independent_behavior_audit": True,
+        "independent_behavior_audit_seed": int(audit_seed),
+        "independent_behavior_audit_role": "external_c_a_b_evaluation_only",
+        "calibration_benchmark_family": family,
+    }
+    return CalibrationDatasetBundle(
+        dataset=dataset,
+        source_groups=source_groups,
+        initial_groups=initial_groups,
+    )
+
+
+def independent_audit_group_ids(dataset: BenchmarkDataset) -> tuple[Array, Array]:
+    """Return group ids for a trajectory-level external audit split."""
+
+    if dataset.episode_ids is not None:
+        source = np.asarray(
+            [f"audit-episode:{_scalar_id(value)}" for value in np.asarray(dataset.episode_ids).reshape(-1)],
+            dtype=np.str_,
+        )
+        if dataset.initial_episode_ids is None:
+            raise ValueError("trajectory audit data require initial_episode_ids")
+        initial = np.asarray(
+            [f"audit-episode:{_scalar_id(value)}" for value in np.asarray(dataset.initial_episode_ids).reshape(-1)],
+            dtype=np.str_,
+        )
+        return source, initial
+    return (
+        np.asarray([f"audit-transition:{index}" for index in range(dataset.n)], dtype=np.str_),
+        np.asarray(
+            [f"audit-initial:{index}" for index in range(dataset.initial_states.shape[0])],
+            dtype=np.str_,
+        ),
+    )
+
+
+def validate_train_audit_independence(
+    train: CalibrationDatasetBundle,
+    audit: CalibrationDatasetBundle,
+) -> None:
+    """Fail closed when the external behavior audit can overlap fitting data."""
+
+    if audit.dataset.metadata.get("independent_behavior_audit") is not True:
+        raise ValueError("audit bundle is not marked as independent")
+    train_family = str(train.dataset.metadata.get("calibration_benchmark_family", ""))
+    audit_family = str(audit.dataset.metadata.get("calibration_benchmark_family", ""))
+    if train_family != audit_family:
+        raise ValueError("training and audit benchmark families differ")
+    if train_family == "d4rl_matched":
+        train_ids = set(np.asarray(train.dataset.initial_episode_ids).reshape(-1).tolist())
+        audit_ids = set(np.asarray(audit.dataset.initial_episode_ids).reshape(-1).tolist())
+        if train_ids & audit_ids:
+            raise ValueError("D4RL training and audit raw episodes overlap")
+        train_digest = train.dataset.metadata.get("behavior_episode_partition_sha256")
+        audit_digest = audit.dataset.metadata.get("behavior_episode_partition_sha256")
+        if not train_digest or train_digest != audit_digest:
+            raise ValueError("D4RL training and audit partition provenance differs")
+    else:
+        train_seed = int(train.dataset.metadata.get("sample_seed", train.dataset.seed))
+        audit_seed = int(audit.dataset.metadata["independent_behavior_audit_seed"])
+        if train_seed == audit_seed:
+            raise ValueError("training and audit sampling seeds must differ")
+
+
+def _independent_audit_config(config: Mapping[str, Any]) -> dict[str, Any]:
+    evaluation = _mapping(config, "evaluation")
+    calibration_error = _mapping(evaluation, "calibration_error")
+    value = calibration_error.get("independent_behavior_audit", {})
+    if not isinstance(value, Mapping):
+        raise ValueError("evaluation.calibration_error.independent_behavior_audit must be an object")
+    return {
+        "enabled": value.get("enabled") is True,
+        "partition_seed": _integer(value.get("partition_seed", 20260813), "partition_seed"),
+        "sample_seed_salt": _integer(value.get("sample_seed_salt", 914273), "sample_seed_salt"),
+        "d4rl_raw_episode_fraction": float(value.get("d4rl_raw_episode_fraction", 0.2)),
+    }
+
+
+def _audit_seed(
+    *,
+    config_id: str,
+    cell_id: str,
+    sample_size: int,
+    gamma: float,
+    seed: int,
+    salt: int,
+) -> int:
+    payload = (
+        f"independent-behavior-audit|{config_id}|{cell_id}|{sample_size}|"
+        f"{gamma:.12g}|{seed}|{salt}"
+    ).encode("utf-8")
+    return int.from_bytes(hashlib.sha256(payload).digest()[:4], "little")
 
 
 def calibration_group_ids(dataset: BenchmarkDataset) -> tuple[Array, Array]:
@@ -548,9 +741,12 @@ __all__: Sequence[str] = (
     "CalibrationDatasetBundle",
     "DatasetPaths",
     "SUPPORTED_FAMILIES",
+    "build_calibration_audit_dataset",
     "build_calibration_dataset",
     "calibration_group_ids",
+    "independent_audit_group_ids",
     "read_dataset_bundle",
+    "validate_train_audit_independence",
     "validate_normalized_dataset",
     "write_dataset_bundle",
 )

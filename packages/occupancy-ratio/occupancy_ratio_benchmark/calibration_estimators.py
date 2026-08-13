@@ -60,6 +60,12 @@ class FoldPredictionResult:
     source_log_score: Array | None = None
     next_log_score: Array | None = None
     initial_log_score: Array | None = None
+    audit_source_q: Array | None = None
+    audit_next_q: Array | None = None
+    audit_initial_q: Array | None = None
+    audit_source_log_score: Array | None = None
+    audit_next_log_score: Array | None = None
+    audit_initial_log_score: Array | None = None
 
 
 def fit_fold_predictions(
@@ -75,6 +81,7 @@ def fit_fold_predictions(
     calibration_source_indices: Array | None = None,
     prediction_chunk_size: int = 65_536,
     negative_tolerance: float = 1e-10,
+    audit_dataset: BenchmarkDataset | None = None,
 ) -> FoldPredictionResult:
     """Fit one frozen baseline and predict q on every cell row.
 
@@ -145,63 +152,34 @@ def fit_fold_predictions(
         )
 
     prediction_started = time.perf_counter()
-    source_log_score = None
-    next_log_score = None
-    initial_log_score = None
-    if estimator == "neural_fori":
-        if log_bounds is None:
-            raise AssertionError("neural_fori log bounds were not initialized")
-        source_log_score, source_projection = _predict_log_score(
+    fitted_prediction = _predict_dataset_roles(
+        model,
+        dataset,
+        estimator=estimator,
+        log_bounds=log_bounds,
+        chunk_size=int(prediction_chunk_size),
+        negative_tolerance=float(negative_tolerance),
+        role_prefix="",
+    )
+    source_q = fitted_prediction["source_q"]
+    next_q = fitted_prediction["next_q"]
+    initial_q = fitted_prediction["initial_q"]
+    source_log_score = fitted_prediction["source_log_score"]
+    next_log_score = fitted_prediction["next_log_score"]
+    initial_log_score = fitted_prediction["initial_log_score"]
+    source_projection = fitted_prediction["source_projection"]
+    next_projection = fitted_prediction["next_projection"]
+    initial_projection = fitted_prediction["initial_projection"]
+    audit_prediction = None
+    if audit_dataset is not None:
+        audit_prediction = _predict_dataset_roles(
             model,
-            dataset.states,
-            dataset.actions,
-            chunk_size=int(prediction_chunk_size),
-            role="source_log_score",
+            audit_dataset,
+            estimator=estimator,
             log_bounds=log_bounds,
-        )
-        next_log_score, next_projection = _predict_log_score(
-            model,
-            dataset.next_states,
-            dataset.next_target_actions,
-            chunk_size=int(prediction_chunk_size),
-            role="next_log_score",
-            log_bounds=log_bounds,
-        )
-        initial_log_score, initial_projection = _predict_log_score(
-            model,
-            dataset.initial_states,
-            dataset.initial_actions,
-            chunk_size=int(prediction_chunk_size),
-            role="initial_log_score",
-            log_bounds=log_bounds,
-        )
-        source_q = _finite_ratio_from_log_score(source_log_score)
-        next_q = _finite_ratio_from_log_score(next_log_score)
-        initial_q = _finite_ratio_from_log_score(initial_log_score)
-    else:
-        source_q, source_projection = _predict_q(
-            model,
-            dataset.states,
-            dataset.actions,
             chunk_size=int(prediction_chunk_size),
             negative_tolerance=float(negative_tolerance),
-            role="source_q",
-        )
-        next_q, next_projection = _predict_q(
-            model,
-            dataset.next_states,
-            dataset.next_target_actions,
-            chunk_size=int(prediction_chunk_size),
-            negative_tolerance=float(negative_tolerance),
-            role="next_q",
-        )
-        initial_q, initial_projection = _predict_q(
-            model,
-            dataset.initial_states,
-            dataset.initial_actions,
-            chunk_size=int(prediction_chunk_size),
-            negative_tolerance=float(negative_tolerance),
-            role="initial_q",
+            role_prefix="audit_",
         )
     prediction_runtime = time.perf_counter() - prediction_started
     projection_count = int(
@@ -269,6 +247,12 @@ def fit_fold_predictions(
         "initial_q_mean": _stable_nonnegative_mean(initial_q),
         "model_diagnostics": _json_safe(getattr(model, "diagnostics", {})),
         "thread_limits": thread_diagnostics,
+        "independent_audit_scored": audit_prediction is not None,
+        "independent_audit_source_rows": (
+            0 if audit_dataset is None else int(audit_dataset.n)
+        ),
+        "independent_audit_used_for_fit": False,
+        "independent_audit_used_for_clamp": False,
     }
     return FoldPredictionResult(
         estimator_id=estimator,
@@ -283,7 +267,66 @@ def fit_fold_predictions(
         source_log_score=source_log_score,
         next_log_score=next_log_score,
         initial_log_score=initial_log_score,
+        audit_source_q=None if audit_prediction is None else audit_prediction["source_q"],
+        audit_next_q=None if audit_prediction is None else audit_prediction["next_q"],
+        audit_initial_q=None if audit_prediction is None else audit_prediction["initial_q"],
+        audit_source_log_score=(
+            None if audit_prediction is None else audit_prediction["source_log_score"]
+        ),
+        audit_next_log_score=(
+            None if audit_prediction is None else audit_prediction["next_log_score"]
+        ),
+        audit_initial_log_score=(
+            None if audit_prediction is None else audit_prediction["initial_log_score"]
+        ),
     )
+
+
+def _predict_dataset_roles(
+    model: Any,
+    dataset: BenchmarkDataset,
+    *,
+    estimator: str,
+    log_bounds: tuple[float, float] | None,
+    chunk_size: int,
+    negative_tolerance: float,
+    role_prefix: str,
+) -> dict[str, Any]:
+    """Score current, target-successor, and target-initial query roles."""
+
+    roles = (
+        ("source", dataset.states, dataset.actions),
+        ("next", dataset.next_states, dataset.next_target_actions),
+        ("initial", dataset.initial_states, dataset.initial_actions),
+    )
+    output: dict[str, Any] = {}
+    for name, states, actions in roles:
+        if estimator == "neural_fori":
+            if log_bounds is None:
+                raise AssertionError("neural_fori log bounds were not initialized")
+            log_score, projection = _predict_log_score(
+                model,
+                states,
+                actions,
+                chunk_size=chunk_size,
+                role=f"{role_prefix}{name}_log_score",
+                log_bounds=log_bounds,
+            )
+            q = _finite_ratio_from_log_score(log_score)
+        else:
+            q, projection = _predict_q(
+                model,
+                states,
+                actions,
+                chunk_size=chunk_size,
+                negative_tolerance=negative_tolerance,
+                role=f"{role_prefix}{name}_q",
+            )
+            log_score = None
+        output[f"{name}_q"] = q
+        output[f"{name}_log_score"] = log_score
+        output[f"{name}_projection"] = projection
+    return output
 
 
 def configure_calibration_worker_threads(estimator_id: str) -> dict[str, Any]:

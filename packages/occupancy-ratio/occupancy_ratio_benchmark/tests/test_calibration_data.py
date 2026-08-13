@@ -6,9 +6,11 @@ import pytest
 from occupancy_ratio_benchmark.calibration_data import (
     DatasetPaths,
     _validate_target_occupancy_pools,
+    build_calibration_audit_dataset,
     build_calibration_dataset,
     calibration_group_ids,
     read_dataset_bundle,
+    validate_train_audit_independence,
     validate_normalized_dataset,
     write_dataset_bundle,
 )
@@ -90,3 +92,71 @@ def test_target_occupancy_pool_contract_is_strict() -> None:
     dataset.target_occupancy_pool_ids[-1] = 0
     with pytest.raises(ValueError, match="two equal"):
         _validate_target_occupancy_pools(dataset, trajectories_per_pool=3)
+
+
+def test_controlled_audit_reuses_mdp_but_not_sample(tmp_path) -> None:
+    cell = {
+        "cell_id": "tabular",
+        "benchmark_family": "random_tabular",
+        "states": 8,
+        "actions": 2,
+        "policy_shift": 0.35,
+    }
+    axes = {"sample_size": 256, "gamma": 0.9, "seed": 3}
+    config = {
+        "config_id": "unit-independent-audit",
+        "truth": {"used_during_fit": False},
+        "evaluation": {
+            "calibration_error": {
+                "independent_behavior_audit": {
+                    "enabled": True,
+                    "partition_seed": 13,
+                    "sample_seed_salt": 29,
+                    "d4rl_raw_episode_fraction": 0.2,
+                }
+            }
+        },
+    }
+    paths = DatasetPaths(asset_cache=tmp_path)
+
+    train = build_calibration_dataset(
+        cell=cell,
+        axis_values=axes,
+        resolved_config=config,
+        paths=paths,
+    )
+    audit = build_calibration_audit_dataset(
+        cell=cell,
+        axis_values=axes,
+        resolved_config=config,
+        paths=paths,
+    )
+
+    validate_train_audit_independence(train, audit)
+    assert train.dataset.seed == audit.dataset.seed == axes["seed"]
+    assert train.dataset.metadata["sample_seed"] != audit.dataset.metadata["sample_seed"]
+    train_ratio = {
+        (tuple(np.asarray(state).reshape(-1)), tuple(np.asarray(action).reshape(-1))): float(ratio)
+        for state, action, ratio in zip(
+            np.asarray(train.dataset.states),
+            np.asarray(train.dataset.actions),
+            np.asarray(train.dataset.true_ratio).reshape(-1),
+        )
+    }
+    audit_ratio = {
+        (tuple(np.asarray(state).reshape(-1)), tuple(np.asarray(action).reshape(-1))): float(ratio)
+        for state, action, ratio in zip(
+            np.asarray(audit.dataset.states),
+            np.asarray(audit.dataset.actions),
+            np.asarray(audit.dataset.true_ratio).reshape(-1),
+        )
+    }
+    shared = sorted(train_ratio.keys() & audit_ratio.keys())
+    assert len(shared) >= 8
+    np.testing.assert_allclose(
+        [train_ratio[key] for key in shared],
+        [audit_ratio[key] for key in shared],
+    )
+    assert not np.array_equal(train.dataset.states, audit.dataset.states)
+    assert set(audit.source_groups).isdisjoint(set(train.source_groups))
+    assert audit.dataset.metadata["independent_behavior_audit"] is True

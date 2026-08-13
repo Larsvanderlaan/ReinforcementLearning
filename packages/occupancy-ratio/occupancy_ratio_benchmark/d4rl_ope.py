@@ -112,6 +112,10 @@ def make_d4rl_ope_dataset(
     target_value_rollouts: int,
     target_occupancy_trajectories_per_pool: int = 0,
     require_exact_rollout_env: bool = True,
+    behavior_episode_partition: str = "all",
+    behavior_audit_fraction: float = 0.2,
+    behavior_partition_seed: int = 0,
+    include_target_evaluation: bool = True,
 ) -> BenchmarkDataset:
     """Create a standard D4RL MuJoCo OPE dataset with real D4RL policy artifacts."""
 
@@ -132,7 +136,14 @@ def make_d4rl_ope_dataset(
         asset_cache_dir=asset_root,
         install_assets=bool(install_assets),
     )
-    transitions = _load_d4rl_dataset_transitions(dataset_path)
+    all_transitions = _load_d4rl_dataset_transitions(dataset_path)
+    transitions, partition_metadata = _partition_d4rl_transitions(
+        all_transitions,
+        partition=str(behavior_episode_partition),
+        audit_fraction=float(behavior_audit_fraction),
+        split_seed=int(behavior_partition_seed),
+        split_key=env_id,
+    )
     rng = np.random.default_rng(int(seed) + 53_001)
     n = transitions.states.shape[0]
     if n <= 0:
@@ -160,33 +171,44 @@ def make_d4rl_ope_dataset(
         occupancy.next_states[next_nonabsorbing, :-1], rng, action_dim=action_dim
     )
     initial_actions = policy.sample(transitions.initial_states, rng, action_dim=action_dim)
-    target_value, target_value_se, target_value_status = _estimate_or_load_d4rl_target_value(
-        policy_id=str(policy_id),
-        asset_cache_dir=asset_root,
-        env=None,
-        policy=policy,
-        gamma=float(gamma),
-        rollouts=int(target_value_rollouts),
-        action_dim=action_dim,
+    if include_target_evaluation:
+        target_value, target_value_se, target_value_status = _estimate_or_load_d4rl_target_value(
+            policy_id=str(policy_id),
+            asset_cache_dir=asset_root,
+            env=None,
+            policy=policy,
+            gamma=float(gamma),
+            rollouts=int(target_value_rollouts),
+            action_dim=action_dim,
+        )
+        (
+            target_occ_states,
+            target_occ_actions,
+            target_occ_episode_ids,
+            target_occ_pool_ids,
+            target_occ_status,
+        ) = _estimate_or_load_d4rl_target_occupancy(
+            policy_id=str(policy_id),
+            asset_cache_dir=asset_root,
+            env=None,
+            policy=policy,
+            gamma=float(gamma),
+            trajectories_per_pool=int(target_occupancy_trajectories_per_pool),
+            state_dim=int(transitions.states.shape[1]),
+            action_dim=action_dim,
+        )
+    else:
+        target_value = target_value_se = float("nan")
+        target_value_status = "independent_behavior_audit_disabled"
+        target_occ_states = target_occ_actions = None
+        target_occ_episode_ids = target_occ_pool_ids = None
+        target_occ_status = "disabled"
+    needs_value = bool(include_target_evaluation) and not np.isfinite(target_value)
+    needs_occupancy = (
+        bool(include_target_evaluation)
+        and int(target_occupancy_trajectories_per_pool) > 0
+        and target_occ_states is None
     )
-    (
-        target_occ_states,
-        target_occ_actions,
-        target_occ_episode_ids,
-        target_occ_pool_ids,
-        target_occ_status,
-    ) = _estimate_or_load_d4rl_target_occupancy(
-        policy_id=str(policy_id),
-        asset_cache_dir=asset_root,
-        env=None,
-        policy=policy,
-        gamma=float(gamma),
-        trajectories_per_pool=int(target_occupancy_trajectories_per_pool),
-        state_dim=int(transitions.states.shape[1]),
-        action_dim=action_dim,
-    )
-    needs_value = not np.isfinite(target_value)
-    needs_occupancy = int(target_occupancy_trajectories_per_pool) > 0 and target_occ_states is None
     rollout_env = None
     rollout_env_status = "cache_complete"
     if needs_value or needs_occupancy:
@@ -226,7 +248,7 @@ def make_d4rl_ope_dataset(
             rollout_env.close()
         except Exception:
             pass
-    if bool(require_exact_rollout_env) and (
+    if bool(include_target_evaluation) and bool(require_exact_rollout_env) and (
         not np.isfinite(target_value)
         or (int(target_occupancy_trajectories_per_pool) > 0 and target_occ_states is None)
     ):
@@ -271,6 +293,7 @@ def make_d4rl_ope_dataset(
         "has_ratio_truth": 0.0,
         "absorbing_state_contract": 1.0,
         "absorbing_source_fraction": float(np.mean(occupancy.is_absorbing)),
+        **partition_metadata,
     }
     return BenchmarkDataset(
         setting="d4rl_ope",
@@ -393,6 +416,65 @@ def _load_d4rl_dataset_transitions(dataset_path: Path) -> _D4RLTransitions:
             f"Could not read D4RL dataset {dataset_path}: {type(exc).__name__}: {exc}"
         ) from exc
     return _transitions_from_d4rl_raw(raw)
+
+
+def _partition_d4rl_transitions(
+    transitions: _D4RLTransitions,
+    *,
+    partition: str,
+    audit_fraction: float,
+    split_seed: int,
+    split_key: str,
+) -> tuple[_D4RLTransitions, dict[str, Any]]:
+    """Apply a deterministic raw-episode train/audit partition."""
+
+    choice = str(partition)
+    if choice not in {"all", "train", "audit"}:
+        raise ValueError("behavior_episode_partition must be 'all', 'train', or 'audit'")
+    fraction = float(audit_fraction)
+    if not np.isfinite(fraction) or not 0.0 < fraction < 1.0:
+        raise ValueError("behavior_audit_fraction must lie strictly between zero and one")
+    episode_ids = np.unique(np.asarray(transitions.initial_episode_ids, dtype=np.int64))
+    if episode_ids.size < 3:
+        raise OptionalDatasetUnavailable("D4RL behavior audit requires at least three episodes")
+    token = hashlib.sha256(
+        f"d4rl-behavior-audit|{split_key}|{int(split_seed)}".encode("utf-8")
+    ).digest()
+    rng = np.random.default_rng(int.from_bytes(token[:8], "little"))
+    ordered = episode_ids[rng.permutation(episode_ids.size)]
+    audit_count = min(episode_ids.size - 2, max(1, int(np.ceil(fraction * episode_ids.size))))
+    audit_ids = np.sort(ordered[:audit_count])
+    train_ids = np.sort(ordered[audit_count:])
+    selected_ids = episode_ids if choice == "all" else (train_ids if choice == "train" else audit_ids)
+    transition_mask = np.isin(transitions.episode_ids, selected_ids)
+    initial_mask = np.isin(transitions.initial_episode_ids, selected_ids)
+    if not np.any(transition_mask) or not np.any(initial_mask):
+        raise OptionalDatasetUnavailable(f"D4RL {choice} episode partition is empty")
+    selected = _D4RLTransitions(
+        states=np.asarray(transitions.states)[transition_mask],
+        actions=np.asarray(transitions.actions)[transition_mask],
+        next_states=np.asarray(transitions.next_states)[transition_mask],
+        rewards=np.asarray(transitions.rewards)[transition_mask],
+        masks=np.asarray(transitions.masks)[transition_mask],
+        episode_ids=np.asarray(transitions.episode_ids)[transition_mask],
+        timesteps=np.asarray(transitions.timesteps)[transition_mask],
+        initial_states=np.asarray(transitions.initial_states)[initial_mask],
+        initial_episode_ids=np.asarray(transitions.initial_episode_ids)[initial_mask],
+    )
+    split_digest = hashlib.sha256(
+        np.asarray(audit_ids, dtype="<i8").tobytes()
+        + np.asarray(train_ids, dtype="<i8").tobytes()
+    ).hexdigest()
+    return selected, {
+        "behavior_episode_partition": choice,
+        "behavior_episode_partition_seed": int(split_seed),
+        "behavior_episode_audit_fraction": fraction,
+        "behavior_episode_total_count": int(episode_ids.size),
+        "behavior_episode_train_count": int(train_ids.size),
+        "behavior_episode_audit_count": int(audit_ids.size),
+        "behavior_episode_selected_count": int(selected_ids.size),
+        "behavior_episode_partition_sha256": split_digest,
+    }
 
 
 def _extract_d4rl_transitions(env: Any) -> _D4RLTransitions:

@@ -68,6 +68,7 @@ def make_dice_rl_reproduction_dataset(
     target_value_rollouts: int,
     target_occupancy_trajectories_per_pool: int = 0,
     collection_batch_size: int = 20,
+    include_target_evaluation: bool = True,
 ) -> BenchmarkDataset:
     """Create a DICE-RL original-style logged dataset from real policies."""
 
@@ -126,7 +127,7 @@ def make_dice_rl_reproduction_dataset(
         target_value = float("nan")
         target_value_se = float("nan")
         target_value_status = "pending_stopped_rollout"
-    else:
+    elif include_target_evaluation:
         target_value, target_value_se, target_value_status = _estimate_or_load_dice_rl_target_value(
             setting=setting,
             load_dir=load_dir,
@@ -139,6 +140,10 @@ def make_dice_rl_reproduction_dataset(
             collection_batch_size=int(collection_batch_size),
             asset_cache_dir=Path(asset_cache_dir),
         )
+    else:
+        target_value = float("nan")
+        target_value_se = float("nan")
+        target_value_status = "independent_behavior_audit_disabled"
 
     action_encoder = _ActionEncoder.from_spec(behavior.action_spec)
     behavior_states = _flatten_features(behavior.states_raw)
@@ -223,7 +228,7 @@ def make_dice_rl_reproduction_dataset(
         target_occ_actions = stopped_eval["occupancy_actions"]
         target_occ_episode_ids = stopped_eval["occupancy_episode_ids"]
         target_occ_pool_ids = stopped_eval["occupancy_pool_ids"]
-    elif target_occ_per_pool > 0 and setting == "dice_rl_cartpole":
+    elif include_target_evaluation and target_occ_per_pool > 0 and setting == "dice_rl_cartpole":
         target_evaluation_batch_size = max(int(collection_batch_size), 256)
         target_occ = _evaluate_infinite_cartpole_target_rollouts(
             target_policy=target_policy,
@@ -241,7 +246,7 @@ def make_dice_rl_reproduction_dataset(
         target_occ_actions = target_occ["occupancy_actions"]
         target_occ_episode_ids = target_occ["occupancy_episode_ids"]
         target_occ_pool_ids = target_occ["occupancy_pool_ids"]
-    elif target_occ_per_pool > 0:
+    elif include_target_evaluation and target_occ_per_pool > 0:
         target_episodes = _collect_dice_rl_episodes(
             load_dir=load_dir,
             env_name=env_name,

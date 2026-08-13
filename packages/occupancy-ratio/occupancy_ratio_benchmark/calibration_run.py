@@ -28,8 +28,10 @@ from occupancy_ratio_benchmark.calibration_artifacts import (
 )
 from occupancy_ratio_benchmark.calibration_data import (
     DatasetPaths,
+    build_calibration_audit_dataset,
     build_calibration_dataset,
     read_dataset_bundle,
+    validate_train_audit_independence,
     write_dataset_bundle,
 )
 from occupancy_ratio_benchmark.calibration_estimators import EstimatorPaths
@@ -105,6 +107,26 @@ def prepare_datasets(
             write_dataset_bundle(path, bundle)
             status = "created"
             dataset_runtime = time.perf_counter() - dataset_started
+        audit_bundle = None
+        audit_digests: dict[str, str] = {}
+        if _independent_audit_enabled(manifest):
+            audit_path = run_root / "audit_datasets" / f"{data_id}.json"
+            if audit_path.exists():
+                audit_bundle = read_dataset_bundle(audit_path)
+            else:
+                identity = _mapping(unit, "identity")
+                audit_bundle = build_calibration_audit_dataset(
+                    cell=_mapping(unit, "cell"),
+                    axis_values=_mapping(identity, "axis_values"),
+                    resolved_config=_mapping(manifest, "resolved_config"),
+                    paths=dataset_paths,
+                )
+                write_dataset_bundle(audit_path, audit_bundle)
+            validate_train_audit_independence(bundle, audit_bundle)
+            audit_digests = {
+                f"audit_{key}": value
+                for key, value in _dataset_digest_fields(audit_path).items()
+            }
         digests = _dataset_digest_fields(path)
         assignment = grouped_assignment(
             manifest=manifest,
@@ -125,6 +147,10 @@ def prepare_datasets(
                 "dataset_runtime_sec": dataset_runtime,
                 "truth_precision_met": bundle.dataset.metadata.get("target_truth_precision_met"),
                 **digests,
+                **audit_digests,
+                "audit_sample_size": (
+                    None if audit_bundle is None else int(audit_bundle.dataset.n)
+                ),
                 "path": str(path),
             }
         )
@@ -154,6 +180,16 @@ def execute_worker(
         dataset_path = run_root / "datasets" / f"{dataset_id(unit)}.json"
         bundle = read_dataset_bundle(dataset_path)
         dataset_digests = _dataset_digest_fields(dataset_path)
+        audit_bundle = None
+        audit_digests: dict[str, str] = {}
+        if _independent_audit_enabled(manifest):
+            audit_path = run_root / "audit_datasets" / f"{dataset_id(unit)}.json"
+            audit_bundle = read_dataset_bundle(audit_path)
+            validate_train_audit_independence(bundle, audit_bundle)
+            audit_digests = {
+                f"audit_{key}": value
+                for key, value in _dataset_digest_fields(audit_path).items()
+            }
         kind = str(_mapping(unit, "identity").get("kind", ""))
         if kind == "cross_calibration_fold":
             result = execute_learned_fold(
@@ -167,6 +203,7 @@ def execute_worker(
                     dice_rl=dice_rl,
                     scope_rl=scope_rl,
                 ),
+                audit_dataset=(None if audit_bundle is None else audit_bundle.dataset),
             )
             arrays = {
                 "source_q": result.source_q,
@@ -181,12 +218,29 @@ def execute_worker(
                         "initial_log_score": result.initial_log_score,
                     }
                 )
+            if result.audit_source_q is not None:
+                arrays.update(
+                    {
+                        "audit_source_q": result.audit_source_q,
+                        "audit_next_q": result.audit_next_q,
+                        "audit_initial_q": result.audit_initial_q,
+                    }
+                )
+            if result.audit_source_log_score is not None:
+                arrays.update(
+                    {
+                        "audit_source_log_score": result.audit_source_log_score,
+                        "audit_next_log_score": result.audit_next_log_score,
+                        "audit_initial_log_score": result.audit_initial_log_score,
+                    }
+                )
             identity = _mapping(unit, "identity")
             axes = _mapping(identity, "axis_values")
             metadata = {
                 **result.diagnostics,
                 "dataset_id": dataset_id(unit),
                 **dataset_digests,
+                **audit_digests,
                 "benchmark_family": _mapping(unit, "cell")["benchmark_family"],
                 "sample_size": int(axes["sample_size"]),
                 "gamma": float(axes["gamma"]),
@@ -199,6 +253,7 @@ def execute_worker(
                 manifest=manifest,
                 unit=unit,
                 dataset=bundle.dataset,
+                audit_dataset=(None if audit_bundle is None else audit_bundle.dataset),
             )
             arrays = {
                 "source_q_by_fold": result.source_q_by_fold,
@@ -208,9 +263,18 @@ def execute_worker(
                 "next_oracle": result.next_oracle,
                 "initial_oracle": result.initial_oracle,
             }
+            if result.audit_source_q_by_fold is not None:
+                arrays.update(
+                    {
+                        "audit_source_q_by_fold": result.audit_source_q_by_fold,
+                        "audit_next_q_by_fold": result.audit_next_q_by_fold,
+                        "audit_initial_q_by_fold": result.audit_initial_q_by_fold,
+                    }
+                )
             metadata = {
                 "dataset_id": dataset_id(unit),
                 **dataset_digests,
+                **audit_digests,
                 "distortion": result.distortion,
                 "conceptual_fold_count": int(result.source_q_by_fold.shape[0]),
                 "fit_runtime_sec": 0.0,
@@ -227,6 +291,9 @@ def execute_worker(
                 fold_runtime,
                 dependency_metadata,
             ) = _dependency_matrices(manifest, run_root, unit)
+            audit_matrices = _dependency_audit_matrices(
+                manifest, run_root, unit
+            ) if audit_bundle is not None else (None,) * 6
             retry_count = int(
                 sum(int(item.get("attempt", 0)) for item in dependency_metadata)
             )
@@ -249,6 +316,15 @@ def execute_worker(
                     dice_rl=dice_rl,
                     scope_rl=scope_rl,
                 ),
+                audit_dataset=(None if audit_bundle is None else audit_bundle.dataset),
+                audit_source_groups=(None if audit_bundle is None else audit_bundle.source_groups),
+                audit_initial_groups=(None if audit_bundle is None else audit_bundle.initial_groups),
+                audit_source_q_by_fold=audit_matrices[0],
+                audit_next_q_by_fold=audit_matrices[1],
+                audit_initial_q_by_fold=audit_matrices[2],
+                audit_source_log_score_by_fold=audit_matrices[3],
+                audit_next_log_score_by_fold=audit_matrices[4],
+                audit_initial_log_score_by_fold=audit_matrices[5],
             )
             arrays = dict(result.calibration_arrays)
             for candidate_id, values in result.candidate_arrays.items():
@@ -317,6 +393,7 @@ def execute_worker(
                 **result.diagnostics,
                 "dataset_id": dataset_id(unit),
                 **dataset_digests,
+                **audit_digests,
                 "rows": rows,
                 "depends_on": list(unit["depends_on"]),
                 "dependency_payload_sha256": [item["payload_sha256"] for item in dependency_metadata],
@@ -449,7 +526,17 @@ def run_manifest(
         dataset_path = run_root / "datasets" / f"{dataset_id(unit)}.json"
         expected = _dataset_digest_fields(dataset_path)
         metadata = payload.get("metadata", {})
-        return all(metadata.get(key) == value for key, value in expected.items())
+        audit_expected: dict[str, str] = {}
+        if _independent_audit_enabled(manifest):
+            audit_path = run_root / "audit_datasets" / f"{dataset_id(unit)}.json"
+            audit_expected = {
+                f"audit_{key}": value
+                for key, value in _dataset_digest_fields(audit_path).items()
+            }
+        return all(
+            metadata.get(key) == value
+            for key, value in {**expected, **audit_expected}.items()
+        )
 
     outcomes: list[UnitOutcome] = []
     if deterministic_units:
@@ -746,6 +833,88 @@ def _dependency_matrices(
         [0.0],
         payloads,
     )
+
+
+def _dependency_audit_matrices(
+    manifest: Mapping[str, Any],
+    run_root: Path,
+    unit: Mapping[str, Any],
+) -> tuple[
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray | None,
+    np.ndarray | None,
+    np.ndarray | None,
+]:
+    """Load external-audit predictions without touching fitted models."""
+
+    index = unit_index(manifest)
+    dependencies = [index[name] for name in unit["depends_on"]]
+    payloads = [
+        read_unit_artifact(run_root=run_root, manifest=manifest, unit=dependency)
+        for dependency in dependencies
+    ]
+    arrays = [
+        read_unit_arrays(run_root=run_root, manifest=manifest, unit=dependency)
+        for dependency in dependencies
+    ]
+    audit_path = run_root / "audit_datasets" / f"{dataset_id(unit)}.json"
+    expected = {
+        f"audit_{key}": value
+        for key, value in _dataset_digest_fields(audit_path).items()
+    }
+    for payload in payloads:
+        metadata = payload.get("metadata", {})
+        if not all(metadata.get(key) == value for key, value in expected.items()):
+            raise ArtifactConflictError(
+                "dependency artifact was produced from a different audit bundle"
+            )
+    base_fit_required = bool(_mapping(unit, "operation")["base_fit_required"])
+    if base_fit_required:
+        order = np.argsort(
+            [int(dependency["held_out_fold"]) for dependency in dependencies]
+        )
+        required = ("audit_source_q", "audit_next_q", "audit_initial_q")
+        if any(any(name not in arrays[index] for name in required) for index in order):
+            raise ArtifactConflictError("learned fold dependency lacks audit predictions")
+        source = np.stack([arrays[index]["audit_source_q"] for index in order])
+        next_q = np.stack([arrays[index]["audit_next_q"] for index in order])
+        initial = np.stack([arrays[index]["audit_initial_q"] for index in order])
+        log_presence = ["audit_source_log_score" in arrays[index] for index in order]
+        if any(log_presence) and not all(log_presence):
+            raise ArtifactConflictError("learned folds mix audit ratio and log-score payloads")
+        if all(log_presence):
+            source_log = np.stack(
+                [arrays[index]["audit_source_log_score"] for index in order]
+            )
+            next_log = np.stack(
+                [arrays[index]["audit_next_log_score"] for index in order]
+            )
+            initial_log = np.stack(
+                [arrays[index]["audit_initial_log_score"] for index in order]
+            )
+        else:
+            source_log = next_log = initial_log = None
+        return source, next_q, initial, source_log, next_log, initial_log
+    if len(arrays) != 1:
+        raise ValueError("deterministic audit aggregation requires one dependency")
+    return (
+        arrays[0]["audit_source_q_by_fold"],
+        arrays[0]["audit_next_q_by_fold"],
+        arrays[0]["audit_initial_q_by_fold"],
+        None,
+        None,
+        None,
+    )
+
+
+def _independent_audit_enabled(manifest: Mapping[str, Any]) -> bool:
+    config = _mapping(manifest, "resolved_config")
+    evaluation = _mapping(config, "evaluation")
+    calibration_error = _mapping(evaluation, "calibration_error")
+    audit = calibration_error.get("independent_behavior_audit")
+    return isinstance(audit, Mapping) and audit.get("enabled") is True
 
 
 def _validate_launch_gate(

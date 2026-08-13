@@ -20,6 +20,7 @@ def _manifest():
                 "direction": "increasing",
                 "damping": 1.0,
                 "boundary_rule": "constant_endpoint_extrapolation",
+                "minimum_boundary_block_observations": 5,
             },
             "estimator_registry": {
                 "oracle_transform_score": {"crossfit_base_fit_required": False}
@@ -85,4 +86,10 @@ def test_deterministic_scores_flow_through_cross_calibrated_aggregation() -> Non
     assert len(output.rows) == 3
     assert output.diagnostics["pooled_calibrator_count"] == 1
     assert output.diagnostics["aggregation"] == "pointwise_median"
+    assert (
+        output.diagnostics["pava_diagnostics"][
+            "required_minimum_boundary_block_observations"
+        ]
+        == 5
+    )
     assert {row["candidate_id"] for row in output.rows} == set(output.candidate_arrays)

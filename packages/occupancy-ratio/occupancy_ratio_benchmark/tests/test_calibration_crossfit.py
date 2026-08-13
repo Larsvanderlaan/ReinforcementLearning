@@ -13,6 +13,7 @@ from occupancy_ratio_benchmark.calibration_crossfit import (
     CrossCalibrationSample,
     MaterialNegativePredictionError,
     PooledCalibrationInput,
+    apply_fitted_cross_calibration,
     fit_cross_calibrated_ensemble,
     fit_cross_calibrated_matrices,
     fit_normalized_pava_calibrator,
@@ -124,6 +125,7 @@ def test_confirmatory_pava_defaults_are_frozen() -> None:
     assert config.pava_direction == "increasing"
     assert config.pava_fixed_point_damping == 1.0
     assert config.pava_support_policy == "constant_extrapolation"
+    assert config.pava_minimum_boundary_block_observations == 1
 
 
 def test_one_pooled_calibrator_then_pointwise_fold_median() -> None:
@@ -230,6 +232,60 @@ def test_matrix_path_selects_oof_diagonal_and_uses_one_common_map() -> None:
     assert np.allclose(result.initial.pava_by_fold, 1.0 + 0.25 * initial_matrix)
     assert result.diagnostics["checkpoint_payload"] == "prediction_matrices"
     assert result.diagnostics["pooled_calibrator_count"] == 1
+
+
+def test_fitted_pooled_map_is_applied_to_external_folds_without_refit() -> None:
+    sample = _sample()
+    assignment = make_grouped_fold_assignment(
+        sample.source_groups,
+        sample.initial_groups,
+        num_folds=3,
+        seed=17,
+    )
+    train_source = np.stack(
+        [np.asarray(sample.states).reshape(-1) + fold + 1.0 for fold in range(3)]
+    )
+    train_next = train_source + 0.25
+    train_initial = np.stack(
+        [
+            np.asarray(sample.initial_states).reshape(-1) + fold + 1.0
+            for fold in range(3)
+        ]
+    )
+    fitter = _RecordingCalibrationFitter()
+    result = fit_cross_calibrated_matrices(
+        source_q_by_fold=train_source,
+        next_q_by_fold=train_next,
+        initial_q_by_fold=train_initial,
+        assignment=assignment,
+        gamma=sample.gamma,
+        config=CrossCalibrationConfig(num_folds=3, seed=17),
+        calibrator_fitter=fitter,
+    )
+    external_source = train_source[:, :5] + 10.0
+    external_next = train_next[:, :5] + 10.0
+    external_initial = train_initial[:, :4] + 10.0
+
+    source, next_result, initial = apply_fitted_cross_calibration(
+        result,
+        source_q_by_fold=external_source,
+        next_q_by_fold=external_next,
+        initial_q_by_fold=external_initial,
+    )
+
+    assert len(fitter.calls) == 1
+    for prediction, raw in (
+        (source, external_source),
+        (next_result, external_next),
+        (initial, external_initial),
+    ):
+        np.testing.assert_allclose(prediction.raw_by_fold, raw)
+        np.testing.assert_allclose(prediction.raw, np.median(raw, axis=0))
+        np.testing.assert_allclose(prediction.pava_by_fold, 1.0 + 0.25 * raw)
+        np.testing.assert_allclose(
+            prediction.pava,
+            np.median(1.0 + 0.25 * raw, axis=0),
+        )
 
 
 def test_matrix_path_calibrates_extreme_neural_scores_in_log_space() -> None:

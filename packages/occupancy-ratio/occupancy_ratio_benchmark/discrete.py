@@ -178,6 +178,7 @@ def make_discrete_dataset(
     policy_shift: float | None = None,
     n_states: int | None = None,
     n_actions: int | None = None,
+    sample_seed: int | None = None,
 ) -> BenchmarkDataset:
     if setting == "random_tabular_mdp":
         shift = 1.0 if policy_shift is None else float(policy_shift)
@@ -192,7 +193,7 @@ def make_discrete_dataset(
     else:
         shift = float(policy_shift)
         mdp = make_grid_mdp(policy_shift=shift) if setting == "discrete_grid" else make_chain_mdp(policy_shift=shift)
-    rng = np.random.default_rng(seed)
+    rng = np.random.default_rng(seed if sample_seed is None else int(sample_seed))
     states_i = rng.choice(mdp.n_states, size=int(sample_size), p=mdp.reference_state_dist)
     actions_i = sample_policy_actions(mdp.behavior_policy, states_i, rng)
     next_states_i = sample_next_states(mdp, states_i, actions_i, rng)
@@ -222,6 +223,7 @@ def make_discrete_dataset(
         "reference_distribution": "fixed_reference_state_distribution",
         "n_states": mdp.n_states,
         "n_actions": mdp.n_actions,
+        "sample_seed": int(seed if sample_seed is None else sample_seed),
     }
     if policy_shift is not None:
         metadata["policy_shift"] = float(policy_shift)

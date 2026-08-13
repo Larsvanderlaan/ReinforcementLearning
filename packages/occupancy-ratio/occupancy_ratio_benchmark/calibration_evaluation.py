@@ -18,6 +18,7 @@ from occupancy_ratio_benchmark.calibration_metrics import (
     controlled_ratio_errors,
     estimate_bellman_cross_moment_error,
     estimate_multi_reward_occupancy_functional_error,
+    independent_audit_basis_masks,
     oracle_floor_kl_sensitivity,
 )
 from occupancy_ratio_benchmark.calibration_truth import has_exact_finite_support
@@ -47,13 +48,17 @@ def evaluate_cross_calibrated_result(
     retry_count: int = 0,
     full_data_predictions: Mapping[str, Array] | None = None,
     full_data_fit_runtime_sec: float | None = None,
+    audit_dataset: BenchmarkDataset | None = None,
+    audit_source_groups: Array | None = None,
+    audit_initial_groups: Array | None = None,
+    audit_candidate_predictions: Mapping[str, Mapping[str, Array]] | None = None,
+    full_data_audit_predictions: Mapping[str, Array] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, Array]]]:
     """Evaluate all frozen candidates and return flat rows plus predictions.
 
-    The cross-moment basis is the candidate transform of the pooled diagonal
-    OOF score, while the audited current/successor/initial weights are the
-    deployed pointwise fold medians.  The two audit halves are used only by the
-    metric and never as calibration-fit splits.
+    When an external audit dataset is supplied, one group-disjoint partition
+    fixes candidate-specific bins and the Gram matrix, and two further
+    partitions form the signed cross-moment. The fitted estimator is frozen.
     """
 
     _validate_normalized_dataset(dataset)
@@ -81,6 +86,47 @@ def evaluate_cross_calibrated_result(
         pooled_basis[FULL_DATA_CANDIDATE_ID] = full_data["current"]
         candidate_ids.append(FULL_DATA_CANDIDATE_ID)
     split_seed = _stable_seed(identity)
+    independent_audit = audit_dataset is not None
+    audit_arrays: dict[str, dict[str, Array]] = {}
+    audit_source_group = audit_initial_group = None
+    basis_mask = transition_audit_mask = initial_audit_mask = None
+    if independent_audit:
+        assert audit_dataset is not None
+        _validate_normalized_dataset(audit_dataset)
+        if audit_source_groups is None or audit_initial_groups is None:
+            raise ValueError("external audit requires source and initial group ids")
+        if audit_candidate_predictions is None:
+            raise ValueError("external audit requires frozen candidate predictions")
+        audit_source_group = _group_vector(
+            audit_source_groups, audit_dataset.n, "audit_source_groups"
+        )
+        audit_initial_n = int(np.asarray(audit_dataset.initial_states).shape[0])
+        audit_initial_group = _group_vector(
+            audit_initial_groups, audit_initial_n, "audit_initial_groups"
+        )
+        for candidate_id in CANDIDATE_IDS:
+            if candidate_id not in audit_candidate_predictions:
+                raise ValueError(f"external audit predictions lack {candidate_id!r}")
+            audit_arrays[candidate_id] = _validated_prediction_roles(
+                audit_candidate_predictions[candidate_id],
+                source_n=audit_dataset.n,
+                next_n=audit_dataset.n,
+                initial_n=audit_initial_n,
+            )
+        if full_data_predictions is not None:
+            if full_data_audit_predictions is None:
+                raise ValueError("external audit lacks full-data control predictions")
+            audit_arrays[FULL_DATA_CANDIDATE_ID] = _validated_prediction_roles(
+                full_data_audit_predictions,
+                source_n=audit_dataset.n,
+                next_n=audit_dataset.n,
+                initial_n=audit_initial_n,
+            )
+        basis_mask, transition_audit_mask, initial_audit_mask = independent_audit_basis_masks(
+            transition_group_ids=audit_source_group,
+            initial_group_ids=audit_initial_group,
+            split_seed=int(split_seed),
+        )
     common = {
         **{str(key): value for key, value in identity.items()},
         "estimator_id": str(estimator_id),
@@ -98,8 +144,18 @@ def evaluate_cross_calibrated_result(
         "base_query_normalization_enabled": False,
         "cross_moment_split_seed": int(split_seed),
         "cross_moment_halves_used_for_fit": False,
-        "cross_moment_debiasing_basis": "pooled_oof_candidate_predictions",
-        "cross_moment_dependence_justification": "grouped_cross_calibration_theorem",
+        "cross_moment_debiasing_basis": (
+            "independent_audit_c_deployed_candidate_predictions"
+            if independent_audit
+            else "pooled_oof_candidate_predictions"
+        ),
+        "cross_moment_dependence_justification": (
+            "independent_behavior_audit_conditional_on_fitted_candidate"
+            if independent_audit
+            else "descriptive_reused_fit_sample"
+        ),
+        "cross_moment_external_behavior_audit": bool(independent_audit),
+        "cross_moment_target": "finite_bin_projected_bellman_calibration_error",
         "policy_value_truth_precision_met": dataset.metadata.get(
             "target_truth_precision_met"
         ),
@@ -126,17 +182,39 @@ def evaluate_cross_calibrated_result(
         current = prediction["current"]
         successor = prediction["next"]
         initial = prediction["initial"]
-        cross_moment = estimate_bellman_cross_moment_error(
-            basis_candidate_weights=pooled_basis[candidate_id],
-            audit_current_weights=current,
-            audit_next_weights=successor,
-            audit_initial_weights=initial,
-            audit_transition_group_ids=source_group,
-            audit_initial_group_ids=initial_group,
-            gamma=float(dataset.gamma),
-            basis_group_ids=source_group,
-            split_seed=int(split_seed),
-        )
+        if independent_audit:
+            assert audit_dataset is not None
+            assert audit_source_group is not None and audit_initial_group is not None
+            assert basis_mask is not None and transition_audit_mask is not None
+            assert initial_audit_mask is not None
+            audit_prediction = audit_arrays[candidate_id]
+            cross_moment = estimate_bellman_cross_moment_error(
+                basis_candidate_weights=audit_prediction["current"][basis_mask],
+                audit_current_weights=audit_prediction["current"][transition_audit_mask],
+                audit_next_weights=audit_prediction["next"][transition_audit_mask],
+                audit_initial_weights=audit_prediction["initial"][initial_audit_mask],
+                audit_transition_group_ids=audit_source_group[transition_audit_mask],
+                audit_initial_group_ids=audit_initial_group[initial_audit_mask],
+                gamma=float(dataset.gamma),
+                basis_group_ids=audit_source_group[basis_mask],
+                split_seed=int(split_seed),
+            )
+            controlled_dataset = audit_dataset
+            controlled_current = audit_prediction["current"]
+        else:
+            cross_moment = estimate_bellman_cross_moment_error(
+                basis_candidate_weights=pooled_basis[candidate_id],
+                audit_current_weights=current,
+                audit_next_weights=successor,
+                audit_initial_weights=initial,
+                audit_transition_group_ids=source_group,
+                audit_initial_group_ids=initial_group,
+                gamma=float(dataset.gamma),
+                basis_group_ids=source_group,
+                split_seed=int(split_seed),
+            )
+            controlled_dataset = dataset
+            controlled_current = current
         value_estimate = float(np.mean(current * rewards))
         value_fields = _value_error_fields(dataset, value_estimate)
         diagnostics = weight_diagnostics(current)
@@ -165,11 +243,9 @@ def evaluate_cross_calibrated_result(
             "pointwise_aggregation": (
                 "none" if is_full_data else "median"
             ),
-            "cross_moment_dependence_justification": (
-                "descriptive_full_data_fit"
-                if is_full_data
-                else "grouped_cross_calibration_theorem"
-            ),
+            "cross_moment_dependence_justification": common[
+                "cross_moment_dependence_justification"
+            ],
             "policy_value_estimate": value_estimate,
             **value_fields,
             "cross_moment_signed_squared_error": float(
@@ -194,9 +270,15 @@ def evaluate_cross_calibrated_result(
                 cross_moment.basis_audit_groups_disjoint
             ),
             "cross_moment_n_union_groups": int(cross_moment.n_union_groups),
+            "cross_moment_n_basis_rows": int(cross_moment.n_basis),
+            "cross_moment_n_basis_groups": cross_moment.n_basis_groups,
+            "cross_moment_n_transition_rows_a": int(cross_moment.n_transition_rows_a),
+            "cross_moment_n_transition_rows_b": int(cross_moment.n_transition_rows_b),
+            "cross_moment_n_initial_rows_a": int(cross_moment.n_initial_rows_a),
+            "cross_moment_n_initial_rows_b": int(cross_moment.n_initial_rows_b),
             **diagnostics,
             **functional_fields,
-            **_controlled_fields(dataset, current),
+            **_controlled_fields(controlled_dataset, controlled_current),
         }
         if candidate_id == "pava_pointwise_median":
             pava_diagnostics = getattr(result.calibrator, "diagnostics", {})

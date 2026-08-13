@@ -4,7 +4,10 @@ import numpy as np
 import pytest
 
 from occupancy_ratio import IsotonicCalibrationConfig, fit_isotonic_fori_pava
-from occupancy_ratio.isotonic_calibration import _predict_step
+from occupancy_ratio.isotonic_calibration import (
+    _pool_small_boundary_pava_blocks,
+    _predict_step,
+)
 
 
 def test_normalized_pava_constant_fixed_point() -> None:
@@ -88,6 +91,96 @@ def test_pava_is_stable_for_log_scores_far_below_exp_range() -> None:
         shifted.fitted_grid_values, ordinary.fitted_grid_values
     )
     np.testing.assert_allclose(shifted.source_weights, ordinary.source_weights)
+
+
+def test_minimum_boundary_block_observations_pools_singleton_upper_tail() -> None:
+    source = np.arange(20, dtype=np.float64)
+    ordinary = fit_isotonic_fori_pava(
+        source_score=source,
+        next_score=source,
+        initial_score=np.full(20, source[-1]),
+        gamma=0.0,
+        config=IsotonicCalibrationConfig(num_iterations=5, tolerance=1e-12),
+    )
+    pooled = fit_isotonic_fori_pava(
+        source_score=source,
+        next_score=source,
+        initial_score=np.full(20, source[-1]),
+        gamma=0.0,
+        config=IsotonicCalibrationConfig(
+            num_iterations=5,
+            tolerance=1e-12,
+            minimum_boundary_block_observations=5,
+        ),
+    )
+
+    assert ordinary.fitted_grid_values[-1] == pytest.approx(20.0)
+    assert np.allclose(pooled.fitted_grid_values, 1.0)
+    assert int(pooled.diagnostics["left_boundary_block_observations"]) >= 5
+    assert int(pooled.diagnostics["right_boundary_block_observations"]) >= 5
+    assert (
+        int(pooled.diagnostics["required_minimum_boundary_block_observations"])
+        == 5
+    )
+    assert np.isclose(np.mean(pooled.source_weights), 1.0)
+    assert np.all(np.diff(pooled.fitted_grid_values) >= -1e-12)
+    assert pooled.diagnostics["post_pava_boundary_pooling"] is True
+    assert sum(
+        row.get("post_pava_boundary_pooling") is True for row in pooled.history
+    ) == 1
+    assert int(pooled.diagnostics["diagnostic_records"]) == int(
+        pooled.diagnostics["iterations"]
+    ) + 1
+
+
+def test_boundary_pooling_leaves_small_interior_blocks_unchanged() -> None:
+    values = np.arange(1.0, 6.0)
+    counts = np.asarray([1, 5, 2, 5, 1], dtype=np.int64)
+    exposure = counts.astype(np.float64)
+    target = exposure * values
+
+    pooled = _pool_small_boundary_pava_blocks(
+        values,
+        exposure,
+        target,
+        observation_count=counts,
+        minimum_boundary_block_observations=5,
+        support_tol=1e-12,
+    )
+
+    np.testing.assert_allclose(
+        pooled,
+        np.asarray([11.0 / 6.0, 11.0 / 6.0, 3.0, 25.0 / 6.0, 25.0 / 6.0]),
+    )
+    assert pooled[2] == values[2]
+    assert np.all(np.diff(pooled) >= 0.0)
+    assert np.dot(exposure, pooled) == pytest.approx(np.dot(exposure, values))
+
+    threshold_supported = _pool_small_boundary_pava_blocks(
+        np.asarray([1.0, 2.0, 3.0]),
+        np.asarray([5.0, 2.0, 5.0]),
+        np.asarray([5.0, 4.0, 15.0]),
+        observation_count=np.asarray([5, 2, 5]),
+        minimum_boundary_block_observations=5,
+        support_tol=1e-12,
+    )
+    np.testing.assert_array_equal(threshold_supported, [1.0, 2.0, 3.0])
+
+
+@pytest.mark.parametrize("minimum", [0, -1, 1.5, True])
+def test_minimum_boundary_block_observations_must_be_positive_integer(
+    minimum: object,
+) -> None:
+    with pytest.raises(ValueError, match="positive integer"):
+        fit_isotonic_fori_pava(
+            source_score=np.ones(10),
+            next_score=np.ones(10),
+            initial_score=np.ones(5),
+            gamma=0.9,
+            config=IsotonicCalibrationConfig(
+                minimum_boundary_block_observations=minimum,  # type: ignore[arg-type]
+            ),
+        )
 
 
 def test_normalized_solver_rejects_stopped_style_no_normalization() -> None:

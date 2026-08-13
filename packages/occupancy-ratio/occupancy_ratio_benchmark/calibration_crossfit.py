@@ -101,6 +101,9 @@ class CrossCalibrationConfig:
         Score-support policy, when supported by the installed solver. Constant
         endpoint extrapolation changes only the learned score map; it does not
         stop or truncate the occupancy recursion.
+    pava_minimum_boundary_block_observations:
+        Minimum number of pooled OOF behavior observations represented by
+        each endpoint PAVA block. Interior blocks are unchanged.
     """
 
     num_folds: int = 10
@@ -112,6 +115,7 @@ class CrossCalibrationConfig:
     pava_direction: Direction = "increasing"
     pava_fixed_point_damping: float = 1.0
     pava_support_policy: str = "constant_extrapolation"
+    pava_minimum_boundary_block_observations: int = 1
 
     def __post_init__(self) -> None:
         if int(self.num_folds) < 2:
@@ -131,6 +135,15 @@ class CrossCalibrationConfig:
             raise ValueError("pava_fixed_point_damping must be in (0, 1].")
         if str(self.pava_support_policy) not in {"error", "constant_extrapolation"}:
             raise ValueError("pava_support_policy must be 'error' or 'constant_extrapolation'.")
+        if (
+            isinstance(self.pava_minimum_boundary_block_observations, bool)
+            or int(self.pava_minimum_boundary_block_observations)
+            != self.pava_minimum_boundary_block_observations
+            or int(self.pava_minimum_boundary_block_observations) <= 0
+        ):
+            raise ValueError(
+                "pava_minimum_boundary_block_observations must be a positive integer."
+            )
 
 
 @dataclass(frozen=True)
@@ -838,6 +851,10 @@ def fit_normalized_pava_calibrator(
         config_kwargs["estimand"] = "normalized_discounted"
     if "support_policy" in parameters:
         config_kwargs["support_policy"] = str(config.pava_support_policy)
+    if "minimum_boundary_block_observations" in parameters:
+        config_kwargs["minimum_boundary_block_observations"] = int(
+            config.pava_minimum_boundary_block_observations
+        )
     calibration_config = IsotonicCalibrationConfig(**config_kwargs)
     return fit_isotonic_fori_pava(
         source_score=pooled.source_score,
@@ -849,6 +866,88 @@ def fit_normalized_pava_calibrator(
         initial_omega=pooled.scalar_source_weight,
         config=calibration_config,
     )
+
+
+def apply_fitted_cross_calibration(
+    result: CrossCalibratedMatrixResult,
+    *,
+    source_q_by_fold: Array,
+    next_q_by_fold: Array,
+    initial_q_by_fold: Array,
+    source_log_score_by_fold: Array | None = None,
+    next_log_score_by_fold: Array | None = None,
+    initial_log_score_by_fold: Array | None = None,
+) -> tuple[CrossCalibratedPredictions, CrossCalibratedPredictions, CrossCalibratedPredictions]:
+    """Apply a fitted pooled map foldwise to an external query dataset."""
+
+    num_folds = int(result.assignment.num_folds)
+    matrices: list[Array] = []
+    counts: list[Array] = []
+    masses: list[Array] = []
+    for value, name in (
+        (source_q_by_fold, "source_q_by_fold"),
+        (next_q_by_fold, "next_q_by_fold"),
+        (initial_q_by_fold, "initial_q_by_fold"),
+    ):
+        raw = np.asarray(value)
+        if raw.ndim != 2 or raw.shape[0] != num_folds or raw.shape[1] == 0:
+            raise ValueError(f"{name} must have shape ({num_folds}, n) with n>0")
+        matrix, count, mass = _q_matrix(
+            raw,
+            name,
+            num_folds=num_folds,
+            num_rows=int(raw.shape[1]),
+            negative_tolerance=float(result.config.negative_tolerance),
+        )
+        matrices.append(matrix)
+        counts.append(count)
+        masses.append(mass)
+
+    log_values = (
+        source_log_score_by_fold,
+        next_log_score_by_fold,
+        initial_log_score_by_fold,
+    )
+    if any(value is not None for value in log_values) and not all(
+        value is not None for value in log_values
+    ):
+        raise ValueError("all three external log-score matrices must be supplied together")
+    if all(value is not None for value in log_values):
+        scores = [
+            _finite_matrix(
+                value,
+                name,
+                num_folds=num_folds,
+                num_rows=matrix.shape[1],
+            )
+            for value, name, matrix in zip(
+                log_values,
+                (
+                    "source_log_score_by_fold",
+                    "next_log_score_by_fold",
+                    "initial_log_score_by_fold",
+                ),
+                matrices,
+                strict=True,
+            )
+        ]
+    else:
+        scores = list(matrices)
+
+    return tuple(
+        _matrix_predictions(
+            matrix,
+            score_by_fold=score,
+            scalar_scale=float(result.pooled_oof.scalar_scale),
+            scalar_log_shift=result.pooled_oof.scalar_log_shift,
+            calibrator=result.calibrator,
+            tiny_negative_count=count,
+            tiny_negative_mass=mass,
+        )
+        for matrix, score, count, mass in zip(
+            matrices, scores, counts, masses, strict=True
+        )
+    )  # type: ignore[return-value]
 
 
 def _score_fold(

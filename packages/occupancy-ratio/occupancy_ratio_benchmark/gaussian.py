@@ -196,9 +196,10 @@ def make_linear_gaussian_dataset(
     sample_size: int,
     seed: int,
     policy_shift: float = 1.0,
+    sample_seed: int | None = None,
 ) -> BenchmarkDataset:
     system = make_linear_gaussian_system(policy_shift=float(policy_shift))
-    rng = np.random.default_rng(seed)
+    rng = np.random.default_rng(seed if sample_seed is None else int(sample_seed))
     states = rng.multivariate_normal(system.initial_mean, system.initial_cov, size=int(sample_size))
     actions = system.behavior_policy.sample(states, rng)
     next_states = system.step(states, actions, rng)
@@ -255,5 +256,6 @@ def make_linear_gaussian_dataset(
             "policy_shift": float(policy_shift),
             "state_dim": 2,
             "action_dim": 1,
+            "sample_seed": int(seed if sample_seed is None else sample_seed),
         },
     )

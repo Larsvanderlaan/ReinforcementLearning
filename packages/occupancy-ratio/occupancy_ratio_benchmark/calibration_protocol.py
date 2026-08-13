@@ -138,6 +138,32 @@ def _validate_manifest_payload(manifest: Mapping[str, Any]) -> None:
     for key, value in expected.items():
         if cross.get(key) != value:
             raise CalibrationManifestError(f"cross_calibration.{key} has drifted")
+    evaluation = config.get("evaluation")
+    calibration_error = (
+        evaluation.get("calibration_error") if isinstance(evaluation, Mapping) else None
+    )
+    audit = (
+        calibration_error.get("independent_behavior_audit")
+        if isinstance(calibration_error, Mapping)
+        else None
+    )
+    if isinstance(audit, Mapping) and audit.get("enabled") is True:
+        expected_audit = {
+            "design": "external_group_disjoint_c_a_b",
+            "basis_role": "c_deployed_candidate_quantile_bins_and_gram",
+            "moment_roles": "a_b_cross_product",
+            "fit_use": "none",
+        }
+        for key, value in expected_audit.items():
+            if audit.get(key) != value:
+                raise CalibrationManifestError(
+                    f"independent_behavior_audit.{key} has drifted"
+                )
+        fraction = audit.get("d4rl_raw_episode_fraction")
+        if not isinstance(fraction, (int, float)) or isinstance(fraction, bool) or not 0.0 < float(fraction) < 1.0:
+            raise CalibrationManifestError(
+                "independent behavior audit fraction must lie in (0,1)"
+            )
     folds = cross.get("folds")
     if not isinstance(folds, int) or isinstance(folds, bool) or folds < 2:
         raise CalibrationManifestError("cross_calibration.folds must be an integer >=2")
@@ -146,6 +172,17 @@ def _validate_manifest_payload(manifest: Mapping[str, Any]) -> None:
         raise CalibrationManifestError("PAVA must normalize each iteration")
     if pava.get("ratio_upper_cap") is not None:
         raise CalibrationManifestError("PAVA ratio caps are forbidden")
+    minimum_block_observations = pava.get(
+        "minimum_boundary_block_observations", 1
+    )
+    if (
+        not isinstance(minimum_block_observations, int)
+        or isinstance(minimum_block_observations, bool)
+        or minimum_block_observations <= 0
+    ):
+        raise CalibrationManifestError(
+            "pava.minimum_boundary_block_observations must be a positive integer"
+        )
     acceptance = config.get("acceptance")
     scientific = acceptance.get("scientific") if isinstance(acceptance, Mapping) else None
     if not isinstance(scientific, Mapping):

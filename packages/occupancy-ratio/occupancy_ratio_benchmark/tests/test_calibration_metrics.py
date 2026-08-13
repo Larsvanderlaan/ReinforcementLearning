@@ -8,6 +8,7 @@ from occupancy_ratio_benchmark.calibration_metrics import (
     estimate_bellman_cross_moment_error,
     estimate_multi_reward_occupancy_functional_error,
     generalized_kl_divergence,
+    independent_audit_basis_masks,
     oracle_floor_kl_sensitivity,
 )
 
@@ -343,3 +344,36 @@ def test_cross_moment_validation(replacement: dict[str, object], message: str) -
     kwargs.update(replacement)
     with pytest.raises(ValueError, match=message):
         estimate_bellman_cross_moment_error(**kwargs)
+
+
+def test_independent_audit_basis_masks_preserve_group_disjointness() -> None:
+    transition_groups = np.repeat(np.arange(12), 3)
+    initial_groups = np.arange(12)
+
+    basis, transition_audit, initial_audit = independent_audit_basis_masks(
+        transition_group_ids=transition_groups,
+        initial_group_ids=initial_groups,
+        split_seed=71,
+    )
+
+    basis_groups = set(transition_groups[basis].tolist())
+    moment_groups = set(transition_groups[transition_audit].tolist()) | set(
+        initial_groups[initial_audit].tolist()
+    )
+    assert basis_groups
+    assert moment_groups
+    assert basis_groups.isdisjoint(moment_groups)
+    np.testing.assert_array_equal(transition_audit, ~basis)
+    assert np.all(np.isin(initial_groups[~initial_audit], list(basis_groups)))
+
+
+def test_independent_audit_basis_masks_are_seed_deterministic() -> None:
+    kwargs = {
+        "transition_group_ids": np.repeat(np.arange(15), 2),
+        "initial_group_ids": np.arange(15),
+        "split_seed": 17,
+    }
+    first = independent_audit_basis_masks(**kwargs)
+    second = independent_audit_basis_masks(**kwargs)
+    for left, right in zip(first, second):
+        np.testing.assert_array_equal(left, right)

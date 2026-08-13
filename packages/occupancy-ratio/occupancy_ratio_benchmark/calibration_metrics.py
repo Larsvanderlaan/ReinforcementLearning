@@ -76,6 +76,7 @@ class BellmanCrossMomentMetrics:
     automatic_bin_count: int
     basis_near_constant: bool
     n_basis: int
+    n_basis_groups: int | None
     n_audit_transitions: int
     n_audit_initial: int
     n_audit_groups: int
@@ -88,6 +89,10 @@ class BellmanCrossMomentMetrics:
     n_transition_groups_b: int
     n_initial_groups_a: int
     n_initial_groups_b: int
+    n_transition_rows_a: int
+    n_transition_rows_b: int
+    n_initial_rows_a: int
+    n_initial_rows_b: int
     split_seed: int
     basis_audit_groups_disjoint: bool | None
 
@@ -333,6 +338,19 @@ def estimate_bellman_cross_moment_error(
         automatic_bin_count=automatic_bins,
         basis_near_constant=near_constant,
         n_basis=int(basis.size),
+        n_basis_groups=(
+            None
+            if basis_group_ids is None
+            else len(
+                set(
+                    _group_keys(
+                        basis_group_ids,
+                        expected_size=basis.size,
+                        name="basis_group_ids",
+                    )
+                )
+            )
+        ),
         n_audit_transitions=int(current.size),
         n_audit_initial=int(initial.size),
         n_audit_groups=len(audit_groups),
@@ -345,9 +363,76 @@ def estimate_bellman_cross_moment_error(
         n_transition_groups_b=len(transition_groups & groups_b),
         n_initial_groups_a=len(initial_groups & groups_a),
         n_initial_groups_b=len(initial_groups & groups_b),
+        n_transition_rows_a=int(np.count_nonzero(transition_is_a)),
+        n_transition_rows_b=int(np.count_nonzero(~transition_is_a)),
+        n_initial_rows_a=int(np.count_nonzero(initial_is_a)),
+        n_initial_rows_b=int(np.count_nonzero(~initial_is_a)),
         split_seed=seed,
         basis_audit_groups_disjoint=basis_disjoint,
     )
+
+
+def independent_audit_basis_masks(
+    *,
+    transition_group_ids: Array,
+    initial_group_ids: Array,
+    split_seed: int,
+    basis_fraction: float = 1.0 / 3.0,
+) -> tuple[Array, Array, Array]:
+    """Split external audit groups into a basis part and an A/B remainder.
+
+    The returned boolean arrays select basis transitions, A/B transitions, and
+    A/B initial rows. Groups selected for the basis are excluded from both
+    moment samples. The remaining groups are split into A/B by
+    :func:`estimate_bellman_cross_moment_error` using the same seed.
+    """
+
+    transition_keys = _group_keys(
+        transition_group_ids,
+        expected_size=np.asarray(transition_group_ids).reshape(-1).size,
+        name="transition_group_ids",
+    )
+    initial_keys = _group_keys(
+        initial_group_ids,
+        expected_size=np.asarray(initial_group_ids).reshape(-1).size,
+        name="initial_group_ids",
+    )
+    transition_groups = set(transition_keys)
+    if len(transition_groups) < 3:
+        raise ValueError("independent C/A/B audit requires at least three transition groups")
+    fraction = float(basis_fraction)
+    if not np.isfinite(fraction) or not 0.0 < fraction < 1.0:
+        raise ValueError("basis_fraction must lie strictly between zero and one")
+    seed = _validate_integer(split_seed, name="split_seed")
+    seed_bytes = str(seed).encode("ascii")
+
+    def ordering(key: bytes) -> tuple[bytes, bytes]:
+        digest = hashlib.blake2b(
+            seed_bytes + b"\0" + key,
+            digest_size=16,
+            person=b"or-cal-basis",
+        ).digest()
+        return digest, key
+
+    ordered = sorted(transition_groups, key=ordering)
+    basis_count = min(len(ordered) - 2, max(1, int(np.floor(fraction * len(ordered)))))
+    basis_groups = set(ordered[:basis_count])
+    transition_basis = np.fromiter(
+        (key in basis_groups for key in transition_keys),
+        dtype=np.bool_,
+        count=len(transition_keys),
+    )
+    transition_audit = ~transition_basis
+    initial_audit = np.fromiter(
+        (key not in basis_groups for key in initial_keys),
+        dtype=np.bool_,
+        count=len(initial_keys),
+    )
+    if not np.any(transition_basis) or np.count_nonzero(transition_audit) < 2:
+        raise RuntimeError("independent audit basis split produced an empty component")
+    if np.count_nonzero(initial_audit) < 2:
+        raise RuntimeError("independent audit basis split left fewer than two initial rows")
+    return transition_basis, transition_audit, initial_audit
 
 
 def estimate_multi_reward_occupancy_functional_error(
@@ -1101,5 +1186,6 @@ __all__: Sequence[str] = (
     "estimate_bellman_cross_moment_error",
     "estimate_multi_reward_occupancy_functional_error",
     "generalized_kl_divergence",
+    "independent_audit_basis_masks",
     "oracle_floor_kl_sensitivity",
 )
