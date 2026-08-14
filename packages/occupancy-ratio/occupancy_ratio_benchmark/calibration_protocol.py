@@ -15,6 +15,10 @@ UNIT_COLLECTIONS = (
     "deterministic_score_units",
     "aggregation_units",
 )
+PRIMARY_CONTROL_SLUGS = {
+    "scalar_normalized_pointwise_median": "scalar",
+    "full_data_raw": "full_data",
+}
 
 
 class CalibrationManifestError(ValueError):
@@ -79,11 +83,7 @@ def dataset_identity(unit: Mapping[str, Any]) -> dict[str, Any]:
     axes = identity.get("axis_values")
     if not isinstance(axes, Mapping):
         raise CalibrationManifestError("unit identity.axis_values must be an object")
-    sampling_axes = {
-        str(key): value
-        for key, value in axes.items()
-        if key not in {"score_distortion"}
-    }
+    sampling_axes = {str(key): value for key, value in axes.items() if key not in {"score_distortion"}}
     return {
         "protocol_id": PROTOCOL_ID,
         "config_sha256": identity.get("config_sha256"),
@@ -139,14 +139,8 @@ def _validate_manifest_payload(manifest: Mapping[str, Any]) -> None:
         if cross.get(key) != value:
             raise CalibrationManifestError(f"cross_calibration.{key} has drifted")
     evaluation = config.get("evaluation")
-    calibration_error = (
-        evaluation.get("calibration_error") if isinstance(evaluation, Mapping) else None
-    )
-    audit = (
-        calibration_error.get("independent_behavior_audit")
-        if isinstance(calibration_error, Mapping)
-        else None
-    )
+    calibration_error = evaluation.get("calibration_error") if isinstance(evaluation, Mapping) else None
+    audit = calibration_error.get("independent_behavior_audit") if isinstance(calibration_error, Mapping) else None
     if isinstance(audit, Mapping) and audit.get("enabled") is True:
         expected_audit = {
             "design": "external_group_disjoint_c_a_b",
@@ -156,14 +150,10 @@ def _validate_manifest_payload(manifest: Mapping[str, Any]) -> None:
         }
         for key, value in expected_audit.items():
             if audit.get(key) != value:
-                raise CalibrationManifestError(
-                    f"independent_behavior_audit.{key} has drifted"
-                )
+                raise CalibrationManifestError(f"independent_behavior_audit.{key} has drifted")
         fraction = audit.get("d4rl_raw_episode_fraction")
         if not isinstance(fraction, (int, float)) or isinstance(fraction, bool) or not 0.0 < float(fraction) < 1.0:
-            raise CalibrationManifestError(
-                "independent behavior audit fraction must lie in (0,1)"
-            )
+            raise CalibrationManifestError("independent behavior audit fraction must lie in (0,1)")
     folds = cross.get("folds")
     if not isinstance(folds, int) or isinstance(folds, bool) or folds < 2:
         raise CalibrationManifestError("cross_calibration.folds must be an integer >=2")
@@ -172,21 +162,35 @@ def _validate_manifest_payload(manifest: Mapping[str, Any]) -> None:
         raise CalibrationManifestError("PAVA must normalize each iteration")
     if pava.get("ratio_upper_cap") is not None:
         raise CalibrationManifestError("PAVA ratio caps are forbidden")
-    minimum_block_observations = pava.get(
-        "minimum_boundary_block_observations", 1
-    )
+    minimum_block_observations = pava.get("minimum_boundary_block_observations", 1)
     if (
         not isinstance(minimum_block_observations, int)
         or isinstance(minimum_block_observations, bool)
         or minimum_block_observations <= 0
     ):
-        raise CalibrationManifestError(
-            "pava.minimum_boundary_block_observations must be a positive integer"
-        )
+        raise CalibrationManifestError("pava.minimum_boundary_block_observations must be a positive integer")
     acceptance = config.get("acceptance")
     scientific = acceptance.get("scientific") if isinstance(acceptance, Mapping) else None
     if not isinstance(scientific, Mapping):
         raise CalibrationManifestError("scientific acceptance gates are missing")
+    primary = config.get("primary_comparison")
+    if not isinstance(primary, Mapping):
+        raise CalibrationManifestError("primary comparison is missing")
+    control = str(primary.get("control", ""))
+    treatment = str(primary.get("treatment", ""))
+    if control not in PRIMARY_CONTROL_SLUGS or treatment != "pava_pointwise_median":
+        raise CalibrationManifestError("primary comparison candidates are unsupported")
+    if scientific.get("primary_control") != control:
+        raise CalibrationManifestError("scientific acceptance control differs from the primary comparison")
+    control_slug = PRIMARY_CONTROL_SLUGS[control]
+    expected_metrics = {
+        "calibration_benefit": f"cross_moment_pava_minus_{control_slug}",
+        "value_safety": (f"absolute_value_error_pava_minus_{control_slug}_minus_margin"),
+    }
+    for endpoint, metric in expected_metrics.items():
+        gate = scientific.get(endpoint)
+        if not isinstance(gate, Mapping) or gate.get("metric") != metric:
+            raise CalibrationManifestError(f"scientific {endpoint} metric differs from the primary comparison")
     for endpoint in (
         "calibration_benefit",
         "value_safety",
@@ -194,15 +198,8 @@ def _validate_manifest_payload(manifest: Mapping[str, Any]) -> None:
     ):
         gate = scientific.get(endpoint)
         if not isinstance(gate, Mapping) or gate.get("scope") != "learned_estimators_only":
-            raise CalibrationManifestError(
-                f"scientific {endpoint} must use learned estimators only"
-            )
-    if (
-        scientific["calibration_benefit"].get(
-            "mechanism_scores_reported_separately"
-        )
-        is not True
-    ):
+            raise CalibrationManifestError(f"scientific {endpoint} must use learned estimators only")
+    if scientific["calibration_benefit"].get("mechanism_scores_reported_separately") is not True:
         raise CalibrationManifestError("exact-score mechanisms must be reported separately")
     execution = config.get("execution")
     if not isinstance(execution, Mapping) or execution.get("timeout_scope") != "atomic_fold_unit":
@@ -221,13 +218,9 @@ def _validate_manifest_payload(manifest: Mapping[str, Any]) -> None:
     provenance.pop("python_version", None)
     observed_digest = content_sha256(immutable)
     if observed_digest != expected_digest:
-        raise CalibrationManifestError(
-            "manifest payload digest mismatch; refusing modified run definition"
-        )
+        raise CalibrationManifestError("manifest payload digest mismatch; refusing modified run definition")
     index = unit_index(manifest)
-    aggregation_ids = {
-        unit["unit_id"] for unit in manifest["aggregation_units"]
-    }
+    aggregation_ids = {unit["unit_id"] for unit in manifest["aggregation_units"]}
     dependency_ids = set(index) - aggregation_ids
     for unit in manifest["aggregation_units"]:
         dependencies = unit.get("depends_on")

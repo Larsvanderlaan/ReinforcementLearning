@@ -38,13 +38,35 @@ def test_pairing_computes_frozen_deltas_and_margin() -> None:
                 _row("pava_pointwise_median", seed, 0.5, 0.4),
             ]
         )
-    pairs, duplicates = pair_candidate_rows(rows)
+    pairs, duplicates = pair_candidate_rows(rows, control_id="scalar_normalized_pointwise_median")
     assert duplicates == 0
     assert len(pairs) == 3
     assert pairs[0]["is_learned_estimator"] is True
     assert pairs[0]["calibration_delta"] == pytest.approx(-0.5)
     assert pairs[0]["value_delta_minus_margin"] == pytest.approx(-0.3)
     assert pairs[0]["ratio_mse_delta"] == pytest.approx(-0.1)
+
+
+def test_pairing_uses_explicit_full_data_control() -> None:
+    rows = [
+        _row("full_data_raw", 0, 2.0, 0.8),
+        _row("scalar_normalized_pointwise_median", 0, 1.0, 0.5),
+        _row("pava_pointwise_median", 0, 0.5, 0.4),
+    ]
+
+    pairs, duplicates = pair_candidate_rows(rows, control_id="full_data_raw")
+
+    assert duplicates == 0
+    assert len(pairs) == 1
+    assert pairs[0]["control_id"] == "full_data_raw"
+    assert pairs[0]["calibration_control"] == pytest.approx(2.0)
+    assert pairs[0]["calibration_delta"] == pytest.approx(-1.5)
+    assert pairs[0]["value_delta"] == pytest.approx(-0.4)
+
+
+def test_pairing_rejects_ambiguous_candidate_ids() -> None:
+    with pytest.raises(ValueError, match="distinct"):
+        pair_candidate_rows([], control_id="pava_pointwise_median")
 
 
 def test_cluster_bootstrap_is_deterministic_and_requires_two_clusters() -> None:

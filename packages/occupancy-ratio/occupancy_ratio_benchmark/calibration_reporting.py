@@ -28,6 +28,7 @@ PAIR_KEYS = (
 )
 SCALAR_ID = "scalar_normalized_pointwise_median"
 PAVA_ID = "pava_pointwise_median"
+FULL_DATA_ID = "full_data_raw"
 TRACK_BY_FAMILY = {
     "random_tabular": "controlled",
     "linear_gaussian": "controlled",
@@ -52,6 +53,14 @@ def build_report(
     if repetitions <= 0:
         raise ValueError("bootstrap_repetitions must be positive")
     manifests = [load_calibration_manifest(root / "manifest.json") for root in roots]
+    primary_controls = {str(manifest["resolved_config"]["primary_comparison"]["control"]) for manifest in manifests}
+    primary_treatments = {str(manifest["resolved_config"]["primary_comparison"]["treatment"]) for manifest in manifests}
+    if len(primary_controls) != 1 or len(primary_treatments) != 1:
+        raise ValueError("all manifests must share one primary comparison")
+    primary_control_id = primary_controls.pop()
+    primary_treatment_id = primary_treatments.pop()
+    if primary_control_id != FULL_DATA_ID or primary_treatment_id != PAVA_ID:
+        raise ValueError("the confirmatory report requires full-data raw versus PAVA median")
     rows = []
     failures = []
     statuses = []
@@ -62,18 +71,26 @@ def build_report(
             rows.extend(payload.get("rows", []))
             failures.extend(payload.get("failures", []))
         statuses.append(status_payload(manifest=manifest, run_root=root))
-    pairs, duplicate_candidates = pair_candidate_rows(rows)
+    primary_pairs, primary_duplicates = pair_candidate_rows(
+        rows,
+        control_id=primary_control_id,
+        treatment_id=primary_treatment_id,
+    )
+    mechanism_pairs, mechanism_duplicates = pair_candidate_rows(
+        rows,
+        control_id=SCALAR_ID,
+        treatment_id=PAVA_ID,
+    )
+    mechanism_pairs = [row for row in mechanism_pairs if not row["is_learned_estimator"]]
+    pairs = [*primary_pairs, *mechanism_pairs]
+    duplicate_candidates = primary_duplicates + mechanism_duplicates
     planned_pairs = int(sum(len(manifest["aggregation_units"]) for manifest in manifests))
     finite_pairs = len(pairs)
     evidence_tiers = {str(manifest["resolved_config"].get("evidence_tier")) for manifest in manifests}
     smoke_only = evidence_tiers == {"smoke"}
 
-    learned_pairs = [row for row in pairs if row["is_learned_estimator"]]
-    calibration_rows = [
-        row
-        for row in learned_pairs
-        if np.isfinite(row["calibration_delta"])
-    ]
+    learned_pairs = [row for row in primary_pairs if row["is_learned_estimator"]]
+    calibration_rows = [row for row in learned_pairs if np.isfinite(row["calibration_delta"])]
     calibration_ci = cluster_bootstrap_interval(
         calibration_rows,
         value_key="calibration_delta",
@@ -83,24 +100,20 @@ def build_report(
     track_summaries = []
     for track in ("controlled", "d4rl", "cartpole"):
         all_selected = [row for row in pairs if row["track"] == track]
-        selected = [row for row in all_selected if row["is_learned_estimator"]]
+        selected = [row for row in primary_pairs if row["track"] == track and row["is_learned_estimator"]]
         track_summaries.append(
             {
                 "track": track,
-                "planned_pairs": _planned_track_pairs(
-                    manifests, track, learned_only=True
-                ),
+                "planned_pairs": _planned_track_pairs(manifests, track, learned_only=True),
                 "finite_pairs": len(selected),
-                "planned_pairs_including_mechanisms": _planned_track_pairs(
-                    manifests, track, learned_only=False
-                ),
+                "planned_pairs_including_mechanisms": _planned_track_pairs(manifests, track, learned_only=False),
                 "finite_pairs_including_mechanisms": len(all_selected),
-                "calibration_scalar": _interval(
+                "calibration_control": _interval(
                     selected,
-                    "calibration_scalar",
+                    "calibration_control",
                     repetitions,
                     bootstrap_seed,
-                    f"calibration-scalar-{track}",
+                    f"calibration-control-{track}",
                 ),
                 "calibration_pava": _interval(
                     selected,
@@ -115,12 +128,12 @@ def build_report(
                     repetitions=repetitions,
                     seed=_mixed_seed(bootstrap_seed, f"calibration-{track}"),
                 ),
-                "policy_value_scalar": _interval(
+                "policy_value_control": _interval(
                     selected,
-                    "value_abs_error_scalar",
+                    "value_abs_error_control",
                     repetitions,
                     bootstrap_seed,
-                    f"value-scalar-{track}",
+                    f"value-control-{track}",
                 ),
                 "policy_value_pava": _interval(
                     selected,
@@ -142,12 +155,12 @@ def build_report(
                     repetitions=repetitions,
                     seed=_mixed_seed(bootstrap_seed, f"value-{track}"),
                 ),
-                "ratio_mse_scalar": _interval(
+                "ratio_mse_control": _interval(
                     selected,
-                    "ratio_mse_scalar",
+                    "ratio_mse_control",
                     repetitions,
                     bootstrap_seed,
-                    f"mse-scalar-{track}",
+                    f"mse-control-{track}",
                 ),
                 "ratio_mse_pava": _interval(
                     selected,
@@ -162,12 +175,12 @@ def build_report(
                     repetitions=repetitions,
                     seed=_mixed_seed(bootstrap_seed, f"mse-{track}"),
                 ),
-                "ratio_kl_scalar": _interval(
+                "ratio_kl_control": _interval(
                     selected,
-                    "ratio_kl_scalar",
+                    "ratio_kl_control",
                     repetitions,
                     bootstrap_seed,
-                    f"kl-scalar-{track}",
+                    f"kl-control-{track}",
                 ),
                 "ratio_kl_pava": _interval(
                     selected,
@@ -185,14 +198,13 @@ def build_report(
             }
         )
     mechanism_summaries = _mechanism_summaries(
-        pairs,
+        mechanism_pairs,
         repetitions=repetitions,
         bootstrap_seed=bootstrap_seed,
     )
 
     all_units_complete = all(
-        status["ok_units"] == status["planned_units"] and status["failed_units"] == 0
-        for status in statuses
+        status["ok_units"] == status["planned_units"] and status["failed_units"] == 0 for status in statuses
     )
     all_pairs_complete = finite_pairs == planned_pairs and duplicate_candidates == 0
     pava_converged = all(
@@ -200,43 +212,34 @@ def build_report(
         for row in rows
         if row.get("candidate_id") == PAVA_ID and row.get("status") == "ok"
     ) and bool(pairs)
-    shared_source = len(
-        {
-            (
-                manifest["provenance"].get("git_commit"),
-                manifest["provenance"].get("source_tree_sha256"),
-                manifest["provenance"].get("environment_sha256"),
-            )
-            for manifest in manifests
-        }
-    ) == 1
+    shared_source = (
+        len(
+            {
+                (
+                    manifest["provenance"].get("git_commit"),
+                    manifest["provenance"].get("source_tree_sha256"),
+                    manifest["provenance"].get("environment_sha256"),
+                )
+                for manifest in manifests
+            }
+        )
+        == 1
+    )
     clean_source_for_evidence = smoke_only or all(
         manifest["provenance"].get("git_dirty") is False for manifest in manifests
     )
     infrastructure_pass = bool(
-        all_units_complete
-        and all_pairs_complete
-        and pava_converged
-        and shared_source
-        and clean_source_for_evidence
+        all_units_complete and all_pairs_complete and pava_converged and shared_source and clean_source_for_evidence
     )
-    calibration_pass = bool(
-        calibration_ci["status"] == "ok" and calibration_ci["ci95_high"] < 0.0
-    )
+    calibration_pass = bool(calibration_ci["status"] == "ok" and calibration_ci["ci95_high"] < 0.0)
     value_track_gates = {
-        row["track"]: bool(
-            row["value_safety"]["status"] == "ok"
-            and row["value_safety"]["ci95_high"] <= 0.0
-        )
+        row["track"]: bool(row["value_safety"]["status"] == "ok" and row["value_safety"]["ci95_high"] <= 0.0)
         for row in track_summaries
     }
     required_tracks_present = all(row["planned_pairs"] > 0 for row in track_summaries)
     value_pass = required_tracks_present and all(value_track_gates.values())
     scientific_enabled = not smoke_only and all(
-        manifest["resolved_config"].get("acceptance", {})
-        .get("scientific", {})
-        .get("enabled", True)
-        is not False
+        manifest["resolved_config"].get("acceptance", {}).get("scientific", {}).get("enabled", True) is not False
         for manifest in manifests
     )
     if smoke_only:
@@ -253,6 +256,8 @@ def build_report(
         "paper_readiness_status": readiness,
         "run_roots": [str(root) for root in roots],
         "run_ids": [manifest["run_id"] for manifest in manifests],
+        "primary_control_id": primary_control_id,
+        "primary_treatment_id": primary_treatment_id,
         "evidence_tiers": sorted(evidence_tiers),
         "planned_pairs": planned_pairs,
         "finite_pairs": finite_pairs,
@@ -306,14 +311,20 @@ def build_report(
 
 def pair_candidate_rows(
     rows: Sequence[Mapping[str, Any]],
+    *,
+    control_id: str,
+    treatment_id: str = PAVA_ID,
 ) -> tuple[list[dict[str, Any]], int]:
-    """Pair PAVA and scalar rows and compute predeclared deltas."""
+    """Pair a frozen treatment and control and compute predeclared deltas."""
+
+    if not control_id or not treatment_id or control_id == treatment_id:
+        raise ValueError("control_id and treatment_id must be distinct nonempty ids")
 
     lookup: dict[tuple[Any, ...], dict[str, Mapping[str, Any]]] = {}
     duplicates = 0
     for row in rows:
         candidate = str(row.get("candidate_id", ""))
-        if candidate not in {SCALAR_ID, PAVA_ID} or row.get("status") != "ok":
+        if candidate not in {control_id, treatment_id} or row.get("status") != "ok":
             continue
         key = tuple(row.get(name) for name in PAIR_KEYS)
         slot = lookup.setdefault(key, {})
@@ -323,17 +334,17 @@ def pair_candidate_rows(
             slot[candidate] = row
     paired = []
     for key, candidates in lookup.items():
-        if set(candidates) != {SCALAR_ID, PAVA_ID}:
+        if set(candidates) != {control_id, treatment_id}:
             continue
-        scalar = candidates[SCALAR_ID]
-        pava = candidates[PAVA_ID]
+        control = candidates[control_id]
+        pava = candidates[treatment_id]
         family = str(pava.get("benchmark_family", ""))
         if family not in TRACK_BY_FAMILY:
             raise ValueError(f"unknown benchmark family {family!r}")
         margin = _number(pava.get("policy_value_safety_margin"))
         value_delta = _difference(
             pava.get("policy_value_absolute_error"),
-            scalar.get("policy_value_absolute_error"),
+            control.get("policy_value_absolute_error"),
         )
         record = {name: value for name, value in zip(PAIR_KEYS, key, strict=True)}
         record.update(
@@ -341,48 +352,34 @@ def pair_candidate_rows(
                 "benchmark_family": family,
                 "track": TRACK_BY_FAMILY[family],
                 "cluster_id": f"{family}|{pava.get('cell_id')}|{pava.get('seed')}",
-                "is_reciprocal_negative_control": (
-                    pava.get("score_distortion") == "reciprocal_normalized_oracle"
-                ),
+                "is_reciprocal_negative_control": (pava.get("score_distortion") == "reciprocal_normalized_oracle"),
                 "is_learned_estimator": pava.get("score_distortion") is None,
-                "calibration_scalar": _number(
-                    scalar.get("cross_moment_signed_squared_error")
-                ),
-                "calibration_pava": _number(
-                    pava.get("cross_moment_signed_squared_error")
-                ),
+                "control_id": control_id,
+                "treatment_id": treatment_id,
+                "calibration_control": _number(control.get("cross_moment_signed_squared_error")),
+                "calibration_pava": _number(pava.get("cross_moment_signed_squared_error")),
                 "calibration_delta": _difference(
                     pava.get("cross_moment_signed_squared_error"),
-                    scalar.get("cross_moment_signed_squared_error"),
+                    control.get("cross_moment_signed_squared_error"),
                 ),
-                "value_abs_error_scalar": _number(
-                    scalar.get("policy_value_absolute_error")
-                ),
-                "value_abs_error_pava": _number(
-                    pava.get("policy_value_absolute_error")
-                ),
+                "value_abs_error_control": _number(control.get("policy_value_absolute_error")),
+                "value_abs_error_pava": _number(pava.get("policy_value_absolute_error")),
                 "value_delta": value_delta,
                 "value_margin": margin,
                 "value_delta_minus_margin": (
-                    value_delta - margin
-                    if np.isfinite(value_delta) and np.isfinite(margin)
-                    else float("nan")
+                    value_delta - margin if np.isfinite(value_delta) and np.isfinite(margin) else float("nan")
                 ),
-                "ratio_mse_scalar": _number(scalar.get("ratio_mse_untruncated")),
+                "ratio_mse_control": _number(control.get("ratio_mse_untruncated")),
                 "ratio_mse_pava": _number(pava.get("ratio_mse_untruncated")),
                 "ratio_mse_delta": _difference(
                     pava.get("ratio_mse_untruncated"),
-                    scalar.get("ratio_mse_untruncated"),
+                    control.get("ratio_mse_untruncated"),
                 ),
-                "ratio_kl_scalar": _number(
-                    scalar.get("ratio_generalized_kl_extended")
-                ),
-                "ratio_kl_pava": _number(
-                    pava.get("ratio_generalized_kl_extended")
-                ),
+                "ratio_kl_control": _number(control.get("ratio_generalized_kl_extended")),
+                "ratio_kl_pava": _number(pava.get("ratio_generalized_kl_extended")),
                 "ratio_kl_delta": _difference(
                     pava.get("ratio_generalized_kl_extended"),
-                    scalar.get("ratio_generalized_kl_extended"),
+                    control.get("ratio_generalized_kl_extended"),
                 ),
                 "pava_converged": pava.get("pava_converged"),
             }
@@ -456,22 +453,13 @@ def _mechanism_summaries(
     repetitions: int,
     bootstrap_seed: int,
 ) -> list[dict[str, Any]]:
-    distortions = sorted(
-        {
-            str(row["score_distortion"])
-            for row in pairs
-            if not row["is_learned_estimator"]
-        }
-    )
+    distortions = sorted({str(row["score_distortion"]) for row in pairs if not row["is_learned_estimator"]})
     output = []
     for distortion in distortions:
-        selected = [
-            row for row in pairs if str(row["score_distortion"]) == distortion
-        ]
+        selected = [row for row in pairs if str(row["score_distortion"]) == distortion]
         summary: dict[str, Any] = {
             "score_distortion": distortion,
-            "is_reciprocal_negative_control": distortion
-            == "reciprocal_normalized_oracle",
+            "is_reciprocal_negative_control": distortion == "reciprocal_normalized_oracle",
             "finite_pairs": len(selected),
         }
         for endpoint in (
@@ -502,12 +490,8 @@ def _planned_track_pairs(
         for unit in manifest["aggregation_units"]:
             family = str(unit["cell"]["benchmark_family"])
             operation = unit.get("operation", {})
-            if (
-                TRACK_BY_FAMILY.get(family) == track
-                and (
-                    not learned_only
-                    or operation.get("base_fit_required") is True
-                )
+            if TRACK_BY_FAMILY.get(family) == track and (
+                not learned_only or operation.get("base_fit_required") is True
             ):
                 count += 1
     return count
@@ -522,17 +506,17 @@ def _flatten_track_summaries(rows: Sequence[Mapping[str, Any]]) -> list[dict[str
             "finite_pairs": row["finite_pairs"],
         }
         for endpoint in (
-            "calibration_scalar",
+            "calibration_control",
             "calibration_pava",
             "calibration",
-            "policy_value_scalar",
+            "policy_value_control",
             "policy_value_pava",
             "policy_value",
             "value_safety",
-            "ratio_mse_scalar",
+            "ratio_mse_control",
             "ratio_mse_pava",
             "ratio_mse",
-            "ratio_kl_scalar",
+            "ratio_kl_control",
             "ratio_kl_pava",
             "ratio_kl",
         ):
@@ -549,9 +533,7 @@ def _flatten_mechanism_summaries(
     for row in rows:
         flat = {
             "score_distortion": row["score_distortion"],
-            "is_reciprocal_negative_control": row[
-                "is_reciprocal_negative_control"
-            ],
+            "is_reciprocal_negative_control": row["is_reciprocal_negative_control"],
             "finite_pairs": row["finite_pairs"],
         }
         for endpoint in (
@@ -578,14 +560,14 @@ def _write_markdown(path: Path, result: Mapping[str, Any]) -> None:
         f"- Value safety gate: {result['scientific']['value_safety_pass']}",
         f"- Primary scope: `{result['scientific']['primary_scope']}`",
         "",
-        "| Track | Planned | Finite | Calibration scalar | Calibration PAVA | PAVA - scalar [95% CI] | Value scalar | Value PAVA | PAVA - scalar [95% CI] |",
+        "| Track | Planned | Finite | Calibration control | Calibration PAVA | PAVA - control [95% CI] | Value control | Value PAVA | PAVA - control [95% CI] |",
         "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for row in result["track_summaries"]:
         lines.append(
             f"| {row['track']} | {row['planned_pairs']} | {row['finite_pairs']} | "
-            f"{_mean_text(row['calibration_scalar'])} | {_mean_text(row['calibration_pava'])} | "
-            f"{_ci_text(row['calibration'])} | {_mean_text(row['policy_value_scalar'])} | "
+            f"{_mean_text(row['calibration_control'])} | {_mean_text(row['calibration_pava'])} | "
+            f"{_ci_text(row['calibration'])} | {_mean_text(row['policy_value_control'])} | "
             f"{_mean_text(row['policy_value_pava'])} | {_ci_text(row['policy_value'])} |"
         )
     lines.extend(
@@ -593,16 +575,16 @@ def _write_markdown(path: Path, result: Mapping[str, Any]) -> None:
             "",
             "### Controlled occupancy-ratio accuracy",
             "",
-            "| Track | MSE scalar | MSE PAVA | MSE delta [95% CI] | KL scalar | KL PAVA | KL delta [95% CI] |",
+            "| Track | MSE control | MSE PAVA | MSE delta [95% CI] | KL control | KL PAVA | KL delta [95% CI] |",
             "|---|---:|---:|---:|---:|---:|---:|",
         ]
     )
     for row in result["track_summaries"]:
         if row["track"] == "controlled":
             lines.append(
-                f"| controlled | {_mean_text(row['ratio_mse_scalar'])} | "
+                f"| controlled | {_mean_text(row['ratio_mse_control'])} | "
                 f"{_mean_text(row['ratio_mse_pava'])} | {_ci_text(row['ratio_mse'])} | "
-                f"{_mean_text(row['ratio_kl_scalar'])} | {_mean_text(row['ratio_kl_pava'])} | "
+                f"{_mean_text(row['ratio_kl_control'])} | {_mean_text(row['ratio_kl_pava'])} | "
                 f"{_ci_text(row['ratio_kl'])} |"
             )
     lines.extend(
@@ -634,14 +616,14 @@ def _write_latex(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
     lines = [
         "\\begin{tabular}{lrrrrr}",
         "\\toprule",
-        "Track & Planned & Finite & Scalar calibration & PAVA calibration & $\\Delta$ (95\\% CI) \\\\",
+        "Track & Planned & Finite & Control calibration & PAVA calibration & $\\Delta$ (95\\% CI) \\\\",
         "\\midrule",
     ]
     for row in rows:
         track_label = str(row["track"]).replace("_", "\\_")
         lines.append(
             f"{track_label} & {row['planned_pairs']} & {row['finite_pairs']} & "
-            f"{_mean_latex(row['calibration_scalar'])} & "
+            f"{_mean_latex(row['calibration_control'])} & "
             f"{_mean_latex(row['calibration_pava'])} & "
             f"{_ci_latex(row['calibration'])} \\\\"
         )
@@ -649,27 +631,23 @@ def _write_latex(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
     _atomic_text(path, "\n".join(lines) + "\n")
 
 
-def _write_controlled_latex(
-    path: Path, rows: Sequence[Mapping[str, Any]]
-) -> None:
+def _write_controlled_latex(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
     controlled = next(row for row in rows if row["track"] == "controlled")
     lines = [
         "\\begin{tabular}{lrrr}",
         "\\toprule",
-        "Endpoint & Scalar & PAVA & $\\Delta$ (95\\% CI) \\\\",
+        "Endpoint & Control & PAVA & $\\Delta$ (95\\% CI) \\\\",
         "\\midrule",
-        f"Policy value absolute error & {_mean_latex(controlled['policy_value_scalar'])} & {_mean_latex(controlled['policy_value_pava'])} & {_ci_latex(controlled['policy_value'])} \\\\",
-        f"Untruncated ratio MSE & {_mean_latex(controlled['ratio_mse_scalar'])} & {_mean_latex(controlled['ratio_mse_pava'])} & {_ci_latex(controlled['ratio_mse'])} \\\\",
-        f"Extended generalized KL & {_mean_latex(controlled['ratio_kl_scalar'])} & {_mean_latex(controlled['ratio_kl_pava'])} & {_ci_latex(controlled['ratio_kl'])} \\\\",
+        f"Policy value absolute error & {_mean_latex(controlled['policy_value_control'])} & {_mean_latex(controlled['policy_value_pava'])} & {_ci_latex(controlled['policy_value'])} \\\\",
+        f"Untruncated ratio MSE & {_mean_latex(controlled['ratio_mse_control'])} & {_mean_latex(controlled['ratio_mse_pava'])} & {_ci_latex(controlled['ratio_mse'])} \\\\",
+        f"Extended generalized KL & {_mean_latex(controlled['ratio_kl_control'])} & {_mean_latex(controlled['ratio_kl_pava'])} & {_ci_latex(controlled['ratio_kl'])} \\\\",
         "\\bottomrule",
         "\\end{tabular}",
     ]
     _atomic_text(path, "\n".join(lines) + "\n")
 
 
-def _write_mechanism_latex(
-    path: Path, rows: Sequence[Mapping[str, Any]]
-) -> None:
+def _write_mechanism_latex(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
     lines = [
         "\\begin{tabular}{lrrrr}",
         "\\toprule",
@@ -694,11 +672,15 @@ def _write_figures(output: Path, rows: Sequence[Mapping[str, Any]]) -> str:
         return f"skipped: {type(error).__name__}: {error}"
     generated = []
     for endpoint, filename, label in (
-        ("calibration", "calibration_delta_by_track", "PAVA - scalar signed cross-moment error"),
-        ("policy_value", "policy_value_delta_by_track", "PAVA - scalar absolute policy-value error"),
-        ("value_safety", "value_safety_delta_by_track", "PAVA - scalar absolute policy-value error - margin"),
-        ("ratio_mse", "ratio_mse_delta_by_track", "PAVA - scalar untruncated ratio MSE"),
-        ("ratio_kl", "ratio_kl_delta_by_track", "PAVA - scalar generalized KL"),
+        ("calibration", "calibration_delta_by_track", "PAVA - full-data control signed cross-moment error"),
+        ("policy_value", "policy_value_delta_by_track", "PAVA - full-data control absolute policy-value error"),
+        (
+            "value_safety",
+            "value_safety_delta_by_track",
+            "PAVA - full-data control absolute policy-value error - margin",
+        ),
+        ("ratio_mse", "ratio_mse_delta_by_track", "PAVA - full-data control untruncated ratio MSE"),
+        ("ratio_kl", "ratio_kl_delta_by_track", "PAVA - full-data control generalized KL"),
     ):
         usable = [row for row in rows if row[endpoint]["status"] == "ok"]
         if not usable:
@@ -716,9 +698,7 @@ def _write_figures(output: Path, rows: Sequence[Mapping[str, Any]]) -> str:
         fig.tight_layout()
         for suffix in ("pdf", "svg"):
             final_path = output / f"{filename}.{suffix}"
-            descriptor, temporary_name = tempfile.mkstemp(
-                prefix=f".{filename}.", suffix=f".{suffix}.tmp", dir=output
-            )
+            descriptor, temporary_name = tempfile.mkstemp(prefix=f".{filename}.", suffix=f".{suffix}.tmp", dir=output)
             os.close(descriptor)
             temporary = Path(temporary_name)
             try:
@@ -740,9 +720,7 @@ def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
         _atomic_text(path, "")
         return
     columns = sorted({key for row in rows for key in row})
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
-    )
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
     temporary = Path(temporary_name)
     try:
         with os.fdopen(descriptor, "w", newline="", encoding="utf-8") as handle:
@@ -812,9 +790,7 @@ def _atomic_json(path: Path, payload: Mapping[str, Any]) -> None:
 
 def _atomic_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
-    )
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
     temporary = Path(temporary_name)
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:

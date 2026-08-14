@@ -51,16 +51,23 @@ def _manifest():
                 "post_median_refit": False,
             },
             "pava": {"normalize_each_iteration": True, "ratio_upper_cap": None},
+            "primary_comparison": {
+                "control": "scalar_normalized_pointwise_median",
+                "treatment": "pava_pointwise_median",
+            },
             "acceptance": {
                 "scientific": {
+                    "primary_control": "scalar_normalized_pointwise_median",
                     "calibration_benefit": {
+                        "metric": "cross_moment_pava_minus_scalar",
                         "scope": "learned_estimators_only",
                         "mechanism_scores_reported_separately": True,
                     },
-                    "value_safety": {"scope": "learned_estimators_only"},
-                    "controlled_ratio_corroboration": {
-                        "scope": "learned_estimators_only"
+                    "value_safety": {
+                        "metric": "absolute_value_error_pava_minus_scalar_minus_margin",
+                        "scope": "learned_estimators_only",
                     },
+                    "controlled_ratio_corroboration": {"scope": "learned_estimators_only"},
                 }
             },
             "execution": {
@@ -80,12 +87,18 @@ def _manifest():
     return payload
 
 
+def _rehash(payload) -> None:
+    immutable = json.loads(json.dumps(payload))
+    immutable.pop("manifest_payload_sha256", None)
+    immutable["provenance"].pop("manifest_host", None)
+    immutable["provenance"].pop("python_version", None)
+    payload["manifest_payload_sha256"] = content_sha256(immutable)
+
+
 def test_generated_smoke_manifest_is_accepted_and_dataset_id_is_shared(tmp_path) -> None:
     manifest_path = tmp_path / "manifest.json"
     payload = _manifest()
-    payload["atomic_fold_units"].append(
-        {**payload["atomic_fold_units"][0], "unit_id": "fold-b"}
-    )
+    payload["atomic_fold_units"].append({**payload["atomic_fold_units"][0], "unit_id": "fold-b"})
     payload["aggregation_units"][0]["depends_on"].append("fold-b")
     immutable = json.loads(json.dumps(payload))
     immutable.pop("manifest_payload_sha256")
@@ -104,4 +117,15 @@ def test_modified_manifest_is_rejected(tmp_path) -> None:
     path = tmp_path / "modified.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(CalibrationManifestError):
+        load_calibration_manifest(path)
+
+
+def test_primary_control_and_scientific_gate_must_match(tmp_path) -> None:
+    payload = _manifest()
+    payload["resolved_config"]["primary_comparison"]["control"] = "full_data_raw"
+    _rehash(payload)
+    path = tmp_path / "mismatched-control.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(CalibrationManifestError, match="acceptance control"):
         load_calibration_manifest(path)
