@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from occupancy_ratio_benchmark.d4rl_ope import (
     _D4RLTransitions,
+    _load_d4rl_dataset_transitions,
+    _load_d4rl_dataset_transitions_cached,
     _partition_d4rl_transitions,
 )
 
@@ -72,3 +75,23 @@ def test_d4rl_partition_changes_with_split_key() -> None:
     )
 
     assert not np.array_equal(first.initial_episode_ids, second.initial_episode_ids)
+
+
+def test_d4rl_loader_reuses_immutable_transition_table(tmp_path) -> None:
+    h5py = pytest.importorskip("h5py")
+    path = tmp_path / "dataset.hdf5"
+    with h5py.File(path, "w") as handle:
+        handle["observations"] = np.arange(12, dtype=np.float64).reshape(4, 3)
+        handle["next_observations"] = np.arange(12, dtype=np.float64).reshape(4, 3) + 1
+        handle["actions"] = np.arange(8, dtype=np.float64).reshape(4, 2)
+        handle["rewards"] = np.arange(4, dtype=np.float64)
+        handle["terminals"] = np.asarray([0, 1, 0, 1], dtype=np.float64)
+        handle["timeouts"] = np.zeros(4, dtype=np.float64)
+
+    _load_d4rl_dataset_transitions_cached.cache_clear()
+    first = _load_d4rl_dataset_transitions(path)
+    second = _load_d4rl_dataset_transitions(path)
+
+    assert first is second
+    assert _load_d4rl_dataset_transitions_cached.cache_info().hits == 1
+    _load_d4rl_dataset_transitions_cached.cache_clear()

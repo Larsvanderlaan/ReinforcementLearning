@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 import hashlib
 import json
 import os
@@ -129,7 +130,9 @@ def make_d4rl_ope_dataset(
         asset_cache_dir=asset_root,
         install_assets=bool(install_assets),
     )
-    policy = D4RLOPEPolicy(*policy_paths)
+    policy = _cached_d4rl_policy(
+        *(str(path.resolve()) for path in policy_paths)
+    )
     env_id = str(spec["env_id"])
     dataset_path = _ensure_d4rl_dataset_asset(
         env_id=env_id,
@@ -403,7 +406,34 @@ def _ensure_d4rl_dataset_asset(*, env_id: str, asset_cache_dir: Path, install_as
     return dataset_path
 
 
+@lru_cache(maxsize=16)
+def _cached_d4rl_policy(
+    sampler_path: str,
+    log_prob_path: str,
+) -> D4RLOPEPolicy:
+    """Reuse immutable ONNX sessions while materializing one manifest."""
+
+    return D4RLOPEPolicy(Path(sampler_path), Path(log_prob_path))
+
+
 def _load_d4rl_dataset_transitions(dataset_path: Path) -> _D4RLTransitions:
+    """Load one immutable D4RL table once per materialization process."""
+
+    resolved = dataset_path.resolve()
+    stat = resolved.stat()
+    return _load_d4rl_dataset_transitions_cached(
+        str(resolved),
+        int(stat.st_size),
+        int(stat.st_mtime_ns),
+    )
+
+
+@lru_cache(maxsize=3)
+def _load_d4rl_dataset_transitions_cached(
+    dataset_path: str,
+    _size: int,
+    _mtime_ns: int,
+) -> _D4RLTransitions:
     try:
         import h5py  # noqa: PLC0415
     except Exception as exc:  # pragma: no cover - optional dependency
