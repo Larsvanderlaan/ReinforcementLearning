@@ -1,0 +1,245 @@
+{
+  "artifacts": [
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/run_config.json",
+      "sha256": "7304050a27f595036645160bcd197b1cf650ef13d5c3d041b51b80a69821cc4e",
+      "size_bytes": 2244
+    },
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/environment.json",
+      "sha256": "89dcca32f4e919f6e51e44bd92f33357843e7d88be9109b049f86aba081a68bb",
+      "size_bytes": 15509
+    },
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/selection_rows.csv",
+      "sha256": "b1c7b670a6152f4235e9ce422a291c1a130ca7643839f2e38fc407a9ce92ae12",
+      "size_bytes": 502958
+    },
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/selection_summary.csv",
+      "sha256": "85c233ec0a32154b70d5dfcffadb360d9e48f63f0590dd9ece5924f4881d546e",
+      "size_bytes": 360
+    },
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/selection_events.json",
+      "sha256": "9f9038d950095298b9d2e768598f9914eb508e828a60cbc04e04c506ca89461c",
+      "size_bytes": 338315
+    },
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/frozen_fore_config.json",
+      "sha256": "ba5810fa12774b558eecb7fba2c7c8b9ce575e0b1a796179fa3124a7fb87d862",
+      "size_bytes": 1839
+    },
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/pilot_manifest.json",
+      "sha256": "f8efbbf17f20dc845cde86c8d850eface9d7c4c4a8fff4c30481b10114634b40",
+      "size_bytes": 5912
+    },
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/cells/b636f71c58915e90/1a_n10000_rep000.json",
+      "sha256": "616e6ae96e07be362454a6047537a82df4fc7a15d66b0e3dcadd85e2a3b52306",
+      "size_bytes": 4313
+    },
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/cells/b636f71c58915e90/1a_n10000_rep001.json",
+      "sha256": "1ad8ac80f09c9ac6d32bba1f9d6eaddfae25522a89eae17dbad0df85238a2d5e",
+      "size_bytes": 4309
+    },
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/cells/b636f71c58915e90/1a_n10000_rep002.json",
+      "sha256": "798c8c9153b3cfe3b5f350b764f8ebdb2c2183b1fcc73b2c31f384d97a68db00",
+      "size_bytes": 4301
+    },
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/cells/b636f71c58915e90/1a_n10000_rep003.json",
+      "sha256": "bf890af3f6dd3bdb2234fdf9eef2f34714aad33a0c5176111e282e16d3461079",
+      "size_bytes": 4310
+    },
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/cells/b636f71c58915e90/1a_n10000_rep004.json",
+      "sha256": "1a53cc91f847117a7920616f63e274dec5c1338a121f73dc83999ddb169d5893",
+      "size_bytes": 4309
+    },
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/cells/b636f71c58915e90/1a_n10000_rep005.json",
+      "sha256": "99aee73ac93654919840f12b58d0444d9fad2c027e5822bc21ebd6f21b7cd9c7",
+      "size_bytes": 4318
+    },
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/cells/b636f71c58915e90/1a_n10000_rep006.json",
+      "sha256": "a07746f9e38c7e2ddf801c55ecad869d34381a6b07305e58f25b80b116aed25e",
+      "size_bytes": 4313
+    },
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/cells/b636f71c58915e90/1a_n10000_rep007.json",
+      "sha256": "bdb1776536363b0022c661a9425b596e456533dc9603d55c3d64b4d58bc6af1f",
+      "size_bytes": 4319
+    },
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/cells/b636f71c58915e90/1a_n10000_rep008.json",
+      "sha256": "54f2a9ae0211beabdbe9120ea9093f3abe77b46e8454dfe72085c02f099ee793",
+      "size_bytes": 4321
+    },
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/cells/b636f71c58915e90/1a_n10000_rep009.json",
+      "sha256": "5e7ea4348951c43c294489ee00956d136b4c3d89654f701f859ef5c9ace888a6",
+      "size_bytes": 4313
+    },
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/cells/b636f71c58915e90/1a_n2500_rep000.json",
+      "sha256": "b5e69994c40e61054bf45df9eb39351b89b599b721ed4939c9d0126773dd979a",
+      "size_bytes": 4297
+    },
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/cells/b636f71c58915e90/1a_n2500_rep001.json",
+      "sha256": "7765543b1def138a72588f43fcebcffbbe041b7fb9d3b696f01c9ca798e3a1f1",
+      "size_bytes": 4297
+    },
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/cells/b636f71c58915e90/1a_n2500_rep002.json",
+      "sha256": "7a90a7bcb93f829fb90b6d5303424277f035661a0605a6737d98b0397e2a154c",
+      "size_bytes": 4302
+    },
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/cells/b636f71c58915e90/1a_n2500_rep003.json",
+      "sha256": "763069301d63b65bed10a895a342894484bdeb32a1d5b419b89b65c8d0cab33b",
+      "size_bytes": 4299
+    },
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/cells/b636f71c58915e90/1a_n2500_rep004.json",
+      "sha256": "3d74ce0b7b642ea4cd8d2af605fb3b7f4fefd56fd89e46a593609f46535467f7",
+      "size_bytes": 4285
+    },
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/cells/b636f71c58915e90/1a_n2500_rep005.json",
+      "sha256": "55e8bc58776c35e647884ea97556f0e21ad159f112155b7167a35e9ab770f3ca",
+      "size_bytes": 4306
+    },
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/cells/b636f71c58915e90/1a_n2500_rep006.json",
+      "sha256": "be3fa4388a6afe04bf43f186896b960e6413fd528b259565e77d2d87d4abb574",
+      "size_bytes": 4311
+    },
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/cells/b636f71c58915e90/1a_n2500_rep007.json",
+      "sha256": "0ddaa65081c95b32151749a29b0996fe13e9101f19839a9168e723f8737a8c99",
+      "size_bytes": 4299
+    },
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/cells/b636f71c58915e90/1a_n2500_rep008.json",
+      "sha256": "8f54cc8c67a980b403e983bc2c7a4667b5ace179492447bc968c5fe47970eaca",
+      "size_bytes": 4294
+    },
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/cells/b636f71c58915e90/1a_n2500_rep009.json",
+      "sha256": "ada814e5b8117ea418dc89ae817e9a988be3106fc3529133f1bcecaa2e2ae5e6",
+      "size_bytes": 4297
+    },
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/cells/b636f71c58915e90/1b_n10000_rep000.json",
+      "sha256": "0903ddca5e2be7478438b28646b19092bc5e84e151919224d0fbff21c3987e1a",
+      "size_bytes": 12808
+    },
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/cells/b636f71c58915e90/1b_n10000_rep001.json",
+      "sha256": "95ba45af36fa29d8079ab7a9e09296001f734503efc9a33744a144cf12e8eff2",
+      "size_bytes": 12848
+    },
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/cells/b636f71c58915e90/1b_n10000_rep002.json",
+      "sha256": "98a5a90976cd387aa9706154548e7c2d1b7049d2a2119a17e0c245e656b02001",
+      "size_bytes": 12818
+    },
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/cells/b636f71c58915e90/1b_n10000_rep003.json",
+      "sha256": "35f38fd4bdf49078989ba05149cc25e10dc42fdc469f795aa2a3f33fd8d39b76",
+      "size_bytes": 12824
+    },
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/cells/b636f71c58915e90/1b_n10000_rep004.json",
+      "sha256": "528cb22ee3af6884d4e61bd1b063d05e7593fc55398b34606c7d0395772a0f94",
+      "size_bytes": 12825
+    },
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/cells/b636f71c58915e90/1b_n10000_rep005.json",
+      "sha256": "537c15e0102e4b7ca9d3f00b13e18f48a618862a0e54d6ba337c52e6fc4b3acf",
+      "size_bytes": 12833
+    },
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/cells/b636f71c58915e90/1b_n10000_rep006.json",
+      "sha256": "d655872bc861c7cd5d40c7a509675fa69d4d452f1cddcb21d8586e0f220a59af",
+      "size_bytes": 12831
+    },
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/cells/b636f71c58915e90/1b_n10000_rep007.json",
+      "sha256": "1673af4c2b2b2f98d668290a909cd3d01ab2cc74a525792bbe42a233ebf0c4f4",
+      "size_bytes": 12822
+    },
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/cells/b636f71c58915e90/1b_n10000_rep008.json",
+      "sha256": "08bf47d8bc7f2a2d4b602393465aaedc39ecaf2fefe6ab90f9f3efe091e4c088",
+      "size_bytes": 12828
+    },
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/cells/b636f71c58915e90/1b_n10000_rep009.json",
+      "sha256": "3fa9164334c50c6a832d6f966faefb7a17c407d2086c1401979c447ee02592e1",
+      "size_bytes": 12833
+    },
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/cells/b636f71c58915e90/1b_n2500_rep000.json",
+      "sha256": "5c9a5220b6a0c193609e6e8e8fbf03be87d2b49ae3f0111db759c3cee12b8d35",
+      "size_bytes": 12796
+    },
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/cells/b636f71c58915e90/1b_n2500_rep001.json",
+      "sha256": "b604cd3ac7858e178cb4fa2e535b2af1007ac29070b348867397af747070728d",
+      "size_bytes": 12752
+    },
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/cells/b636f71c58915e90/1b_n2500_rep002.json",
+      "sha256": "bc63daf4c6af699a69ef493115bc2b53005324a0963c29e43e0d06dad19b77dd",
+      "size_bytes": 12793
+    },
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/cells/b636f71c58915e90/1b_n2500_rep003.json",
+      "sha256": "0e093e469ce6ad068464c84368359015b0403a66a3163e31ecb7abc18c7b9610",
+      "size_bytes": 12749
+    },
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/cells/b636f71c58915e90/1b_n2500_rep004.json",
+      "sha256": "6ea62c06c3b7c2ef933d6d4372d82117867e924f51708562298d3902b7b1cc73",
+      "size_bytes": 12749
+    },
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/cells/b636f71c58915e90/1b_n2500_rep005.json",
+      "sha256": "5dfdbde4f231eebdfa710cef3ea0c0cda7023bd5fe98762ca0d1ba8858432700",
+      "size_bytes": 12750
+    },
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/cells/b636f71c58915e90/1b_n2500_rep006.json",
+      "sha256": "2de81f6cddcefe65bc00f49616be2be1bc220c4f8d94b8c763b47f3ef9b0d6f7",
+      "size_bytes": 12792
+    },
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/cells/b636f71c58915e90/1b_n2500_rep007.json",
+      "sha256": "76b2c09d34b92658d0a84bec84fcceaeef1a02d965a62b19ea87b87ff15b442e",
+      "size_bytes": 12795
+    },
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/cells/b636f71c58915e90/1b_n2500_rep008.json",
+      "sha256": "f8c4e3d660e6be51f66978fa8e0e6e92a3b7055f2bb6f4c1392d4da3accad8d5",
+      "size_bytes": 12789
+    },
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/cells/b636f71c58915e90/1b_n2500_rep009.json",
+      "sha256": "680ce94289f55146b297fa7e94443992bd2c4dd1ac98283e07d8f9725247dbe7",
+      "size_bytes": 12789
+    },
+    {
+      "path": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/apbv_selection_behavior.png",
+      "sha256": "2915e03107e4da1afe6fd4e3161f048cbb8aeca18d7766252202859a8d39a3ad",
+      "size_bytes": 114281
+    }
+  ],
+  "validated": true
+}

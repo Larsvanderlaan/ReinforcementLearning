@@ -1,0 +1,19 @@
+\begin{table}[t]
+\centering
+\caption{Data-fusion estimation conditional on the frozen outcome source.}
+\label{tab:data-fusion}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{llrrrrrrr}
+\toprule
+$n$ & Estimator & Bias & MC SD & RMSE & Mean SE & Coverage & Width & Fail. \\
+\midrule
+2500 & Plug-in & 0.011 & 0.017 & 0.020 & -- & -- & -- & 0.000 \\
+ & D-IRL & 0.022 & 0.075 & 0.077 & 0.073 & 0.950 & 0.284 & 0.000 \\
+5000 & Plug-in & 0.004 & 0.012 & 0.012 & -- & -- & -- & 0.000 \\
+ & D-IRL & -0.010 & 0.045 & 0.045 & 0.051 & 1.000 & 0.201 & 0.000 \\
+10000 & Plug-in & 0.003 & 0.005 & 0.006 & -- & -- & -- & 0.000 \\
+ & D-IRL & -0.000 & 0.034 & 0.033 & 0.036 & 1.000 & 0.140 & 0.000 \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}

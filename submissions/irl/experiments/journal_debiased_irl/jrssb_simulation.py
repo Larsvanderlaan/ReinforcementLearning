@@ -37,13 +37,54 @@ if "utils" not in sys.modules or Path(getattr(sys.modules["utils"], "__file__", 
 from policy_estimation import fit_behavior_cloning_policy, fit_maxent_irl_policy
 from q_evaluation import fit_fqe_neural
 
+try:
+    from .fore_ratio import (
+        FOREFitOptions,
+        deterministic_three_way_split,
+        fit_selected_fore_ratio,
+        fit_selected_signed_fore_ratio,
+        paper_early_stopping_candidates,
+        ratio_diagnostics,
+    )
+except ImportError:  # pragma: no cover - direct script execution
+    from fore_ratio import (
+        FOREFitOptions,
+        deterministic_three_way_split,
+        fit_selected_fore_ratio,
+        fit_selected_signed_fore_ratio,
+        paper_early_stopping_candidates,
+        ratio_diagnostics,
+    )
+
 
 EPS = 1e-8
-EXAMPLE1A_POLICY_ESTIMATORS = ("bc", "maxent", "coarse", "blend", "structural-linear")
-EXAMPLE1B_POLICY_ESTIMATORS = ("bc", "maxent", "structural", "structural-linear")
+EXAMPLE1A_POLICY_ESTIMATORS = (
+    "bc",
+    "maxent",
+    "sieve-logit",
+    "coarse",
+    "blend",
+    "structural-linear",
+)
+EXAMPLE1B_POLICY_ESTIMATORS = (
+    "bc",
+    "maxent",
+    "sieve-logit",
+    "structural",
+    "structural-linear",
+)
 EXAMPLE2_POLICY_ESTIMATORS = ("bc", "maxent", "structural-linear")
+SUPPORTED_EXAMPLE1A_POLICY_ESTIMATORS = EXAMPLE1A_POLICY_ESTIMATORS + ("oracle",)
+SUPPORTED_EXAMPLE1B_POLICY_ESTIMATORS = EXAMPLE1B_POLICY_ESTIMATORS + ("oracle",)
 POLICY_ESTIMATORS = ("bc", "maxent")
 NUISANCE_SAMPLE_MODES = ("crossfit", "independent")
+CROSSFIT_SE_METHODS = ("iid", "fold-cluster", "fold-cluster-max")
+CROSSFIT_CI_METHODS = ("normal", "fold-t")
+DATA_FUSION_POLICY_MODES = ("known-logging", "sieve-logit", "oracle")
+DATA_FUSION_TRANSITION_MODES = ("sieve", "oracle")
+DATA_FUSION_G_MODES = ("frozen", "oracle")
+DATA_FUSION_RATIO_MODES = ("neural-fore", "oracle-adaptive")
+BEHAVIOR_POLICY_DESIGNS = ("quadratic-logit", "soft-mdp-stress")
 _MONTE_CARLO_WORKER_ORACLE: Optional["JRSSBOracle"] = None
 
 
@@ -108,6 +149,79 @@ def combine_repeated_split_se(split_estimates: Sequence[float], split_ses: Seque
     )
 
 
+def crossfit_se_diagnostics(
+    contributions: np.ndarray,
+    fold_indices: Optional[Sequence[np.ndarray]],
+) -> Dict[str, float]:
+    """Return iid and fold-cluster standard errors for one cross-fit estimate.
+
+    The cluster calculation treats each held-out fold as one cluster and is a
+    finite-sample diagnostic for fold-specific first-stage drift. It is not
+    used for ordinary iid inference unless explicitly requested in the config.
+    """
+    contributions = np.asarray(contributions, dtype=float).reshape(-1)
+    n = contributions.size
+    if n < 2 or not np.all(np.isfinite(contributions)):
+        raise ValueError("contributions must contain at least two finite values.")
+    centered = contributions - float(np.mean(contributions))
+    iid_se = float(np.std(centered, ddof=1) / math.sqrt(n))
+    folds = [] if fold_indices is None else [np.asarray(fold, dtype=int) for fold in fold_indices]
+    folds = [fold for fold in folds if fold.size > 0]
+    if len(folds) < 2:
+        cluster_se = float("nan")
+    else:
+        covered = np.concatenate(folds)
+        if covered.size != n or np.unique(covered).size != n or np.any(np.sort(covered) != np.arange(n)):
+            raise ValueError("fold_indices must partition all contribution rows exactly once.")
+        cluster_scores = np.asarray(
+            [float(np.sum(centered[fold])) for fold in folds], dtype=float
+        )
+        cluster_variance = (
+            len(folds)
+            / (len(folds) - 1.0)
+            * float(np.sum(np.square(cluster_scores)))
+            / float(n**2)
+        )
+        cluster_se = float(math.sqrt(max(cluster_variance, 0.0)))
+    return {
+        "iid_se": iid_se,
+        "fold_cluster_se": cluster_se,
+        "fold_count": float(len(folds)),
+    }
+
+
+def selected_crossfit_se(
+    diagnostics: Dict[str, float],
+    method: str,
+) -> float:
+    """Select a predeclared SE from cross-fit diagnostics."""
+    if method not in CROSSFIT_SE_METHODS:
+        raise ValueError(f"Unknown cross-fit SE method: {method}")
+    iid_se = float(diagnostics["iid_se"])
+    cluster_se = float(diagnostics["fold_cluster_se"])
+    if method == "iid" or not np.isfinite(cluster_se):
+        return iid_se
+    if method == "fold-cluster":
+        return cluster_se
+    return max(iid_se, cluster_se)
+
+
+def crossfit_critical_value(
+    base_critical_value: float,
+    fold_count: int,
+    method: str,
+) -> float:
+    """Return a normal or fold-level Student critical value."""
+    if method not in CROSSFIT_CI_METHODS:
+        raise ValueError(f"Unknown cross-fit CI method: {method}")
+    base = float(base_critical_value)
+    if method == "normal" or fold_count < 2:
+        return base
+    from scipy.stats import t
+
+    return max(base, float(t.ppf(0.975, df=fold_count - 1)))
+
+
 def mean_action_kl(reference_probs: np.ndarray, estimated_probs: np.ndarray) -> float:
     reference_probs = clip_and_normalize(reference_probs)
     estimated_probs = clip_and_normalize(estimated_probs)
@@ -123,6 +237,76 @@ def mean_action_kl(reference_probs: np.ndarray, estimated_probs: np.ndarray) -> 
             )
         )
     )
+
+
+def ordinary_ratio_if_contribution(
+    value: np.ndarray,
+    state_action_ratio: np.ndarray,
+    state_ratio: np.ndarray,
+    bellman_residual: np.ndarray,
+) -> np.ndarray:
+    """Evaluate the ordinary EIF using stable state-action ratio algebra."""
+    return value + state_action_ratio * bellman_residual + state_action_ratio - state_ratio
+
+
+def signed_ratio_if_contribution(
+    value: np.ndarray,
+    state_action_ratio: np.ndarray,
+    state_ratio: np.ndarray,
+    signed_state_action_ratio: np.ndarray,
+    signed_state_ratio: np.ndarray,
+    bellman_residual: np.ndarray,
+    policy_residual: np.ndarray,
+    *,
+    gamma: float,
+    temperature: float,
+) -> np.ndarray:
+    """Evaluate the policy-dependent EIF without explicit propensity division."""
+    return (
+        value
+        + state_action_ratio * bellman_residual
+        + (gamma / temperature) * signed_state_action_ratio * policy_residual
+        + signed_state_action_ratio / temperature
+        + state_action_ratio
+        - signed_state_ratio / temperature
+        - state_ratio
+    )
+
+
+def reconstruct_total_signed_ratios(
+    ordinary_all_action_ratios: np.ndarray,
+    future_signed_all_action_ratios: np.ndarray,
+    advantages: np.ndarray,
+    behavior_probs: np.ndarray,
+    actions: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Add the current score to the future Jordan/FORE signed ratio.
+
+    If ``z=d(q-V)``, the signed state-action representer is
+    ``(I-gamma P_pi^dagger)^(-1) z``.  Successor-initialized FORE estimates
+    only the strictly future part, so the observed-action ratio must include
+    ``z`` explicitly.  The state ratio is always reconstructed by averaging
+    the total action-specific ratio under the fitted behavior policy; this
+    immediate state average need not vanish for estimated nuisances.
+    """
+    ordinary = np.asarray(ordinary_all_action_ratios, dtype=float)
+    future = np.asarray(future_signed_all_action_ratios, dtype=float)
+    advantage = np.asarray(advantages, dtype=float)
+    probs = np.asarray(behavior_probs, dtype=float)
+    action_index = np.asarray(actions, dtype=int).reshape(-1)
+    if not (
+        ordinary.ndim == 2
+        and ordinary.shape == future.shape == advantage.shape == probs.shape
+        and ordinary.shape[0] == action_index.size
+    ):
+        raise ValueError("Signed-ratio reconstruction arrays have incompatible shapes.")
+    if np.any(action_index < 0) or np.any(action_index >= ordinary.shape[1]):
+        raise ValueError("Signed-ratio reconstruction received an invalid action.")
+    total = ordinary * advantage + future
+    if not np.all(np.isfinite(total)):
+        raise FloatingPointError("Signed-ratio reconstruction is nonfinite.")
+    rows = np.arange(action_index.size)
+    return total[rows, action_index], np.sum(probs * total, axis=1)
 
 
 def calibrate_policy_temperature(
@@ -691,6 +875,26 @@ def fit_behavior_policy_example1a(
     actions: np.ndarray,
     seed: int,
 ):
+    if oracle.config.example1a_policy_estimator == "oracle":
+        return GridProbabilityPolicy(oracle=oracle, policy_grid=oracle.pi0)
+    if oracle.config.example1a_policy_estimator == "sieve-logit":
+        from data_fusion_simulation import fit_sieve_logit_behavior_policy
+
+        sieve_kwargs = (
+            {
+                "degree": oracle.config.main_sieve_degree,
+                "candidate_c": (oracle.config.main_sieve_c,),
+            }
+            if oracle.config.main_sieve_mode == "fixed-quadratic"
+            else {}
+        )
+        return fit_sieve_logit_behavior_policy(
+            states=states,
+            actions=actions,
+            n_actions=oracle.config.n_actions,
+            seed=seed,
+            **sieve_kwargs,
+        ).policy
     if oracle.config.example1a_policy_estimator == "structural-linear":
         return fit_structural_linear_behavior_policy_example1b(
             oracle=oracle,
@@ -733,6 +937,26 @@ def fit_behavior_policy_example1b(
     actions: np.ndarray,
     seed: int,
 ):
+    if oracle.config.example1b_policy_estimator == "oracle":
+        return GridProbabilityPolicy(oracle=oracle, policy_grid=oracle.pi0)
+    if oracle.config.example1b_policy_estimator == "sieve-logit":
+        from data_fusion_simulation import fit_sieve_logit_behavior_policy
+
+        sieve_kwargs = (
+            {
+                "degree": oracle.config.main_sieve_degree,
+                "candidate_c": (oracle.config.main_sieve_c,),
+            }
+            if oracle.config.main_sieve_mode == "fixed-quadratic"
+            else {}
+        )
+        return fit_sieve_logit_behavior_policy(
+            states=states,
+            actions=actions,
+            n_actions=oracle.config.n_actions,
+            seed=seed,
+            **sieve_kwargs,
+        ).policy
     if oracle.config.example1b_policy_estimator == "structural":
         return fit_structural_behavior_policy_example1b(
             oracle=oracle,
@@ -777,6 +1001,13 @@ def effective_sample_size(weights: np.ndarray) -> float:
 
 def _init_monte_carlo_worker(config: "JRSSBConfig") -> None:
     global _MONTE_CARLO_WORKER_ORACLE
+    try:
+        import torch
+
+        torch.set_num_threads(1)
+        torch.set_num_interop_threads(1)
+    except (ImportError, RuntimeError):
+        pass
     _MONTE_CARLO_WORKER_ORACLE = JRSSBOracle(config)
 
 
@@ -785,7 +1016,7 @@ def _run_single_replication_worker(task: tuple[int, int, str, str]) -> "SingleRu
     if _MONTE_CARLO_WORKER_ORACLE is None:
         raise RuntimeError("Monte Carlo worker oracle was not initialized.")
     n, seed, example_id, ratio_mode = task
-    return run_single_replication(
+    return run_single_replication_safe(
         oracle=_MONTE_CARLO_WORKER_ORACLE,
         n=n,
         seed=seed,
@@ -798,7 +1029,7 @@ def _run_single_replication_thread(
     task: tuple["JRSSBOracle", int, int, str, str]
 ) -> "SingleRunResult":
     oracle, n, seed, example_id, ratio_mode = task
-    return run_single_replication(
+    return run_single_replication_safe(
         oracle=oracle,
         n=n,
         seed=seed,
@@ -939,11 +1170,16 @@ class Grid2D:
 class JRSSBConfig:
     state_low: float = -2.5
     state_high: float = 2.5
-    main_grid_points: int = 61
+    # The 41x41 discretization changes the adaptive estimand by 0.0017 versus
+    # a 61x61 reference and keeps stationary-weighted ratio error near 1% or
+    # below, while materially reducing repeated structural-policy fit time.
+    main_grid_points: int = 41
     coarse_grid_points: int = 31
     n_actions: int = 4
+    behavior_policy_design: str = "soft-mdp-stress"
     gamma_behavior: float = 0.90
     gamma_example2: float = 0.92
+    data_fusion_target_gamma: float = 0.80
     tau_behavior: float = 0.80
     tau_star: float = 0.60
     noise_scale: float = 0.20
@@ -975,9 +1211,14 @@ class JRSSBConfig:
     ratio_smoothing: float = 1.0
     coarse_policy_alpha: float = 2.0
     crossfit_folds: int = 5
-    nuisance_sample_mode: str = "independent"
+    crossfit_se_method: str = "iid"
+    crossfit_ci_method: str = "normal"
+    nuisance_sample_mode: str = "crossfit"
     example1a_nuisance_method: str = "neural-main-oracle-bellman"
-    example1a_policy_estimator: str = "maxent"
+    example1a_policy_estimator: str = "sieve-logit"
+    main_sieve_mode: str = "fixed-quadratic"
+    main_sieve_degree: int = 2
+    main_sieve_c: float = 10.0
     example1a_probability_clip_min: float = 1e-3
     example1a_probability_clip_max: float = 0.999
     example1a_temperature_calibration: bool = False
@@ -991,12 +1232,19 @@ class JRSSBConfig:
     example1b_bc_hidden_sizes: tuple[int, ...] = (64, 64)
     example1b_probability_clip_min: float = 0.02
     example1b_probability_clip_max: float = 0.98
-    example1b_policy_estimator: str = "structural-linear"
+    # Selected by held-out action log likelihood in the policy-nuisance pilot;
+    # the structural inverse fit is slower and does not improve validation.
+    example1b_policy_estimator: str = "sieve-logit"
     example1b_temperature_calibration: bool = True
     example1b_use_coarse_blend: bool = False
     example1b_blend_grid: tuple[float, ...] = (0.0, 0.25, 0.5, 0.75, 1.0)
-    example1b_structural_iters: int = 120
-    example1b_structural_bellman_iters: int = 80
+    # Held-out action log likelihood plateaus by 300 iterations in the
+    # truth-blind behavior-policy pilot; 600 iterations doubles runtime with
+    # no material validation improvement.
+    example1b_structural_iters: int = 300
+    # Twenty differentiable Bellman steps and 40/80-step variants have
+    # indistinguishable held-out action log likelihood in the locked pilot.
+    example1b_structural_bellman_iters: int = 20
     example1b_structural_learning_rate: float = 0.05
     example1b_structural_weight_decay: float = 1e-4
     example1b_structural_smoothness_penalty: float = 0.5
@@ -1007,8 +1255,30 @@ class JRSSBConfig:
     example2_policy_estimator: str = "maxent"
     example2_repeated_splits: int = 1
     example2_ci_critical_value: float = 1.96
-    mc_sample_sizes: tuple[int, ...] = (1000, 2500, 5000, 10000)
-    mc_repetitions: int = 400
+    fore_hidden_sizes: tuple[int, ...] = (64, 64)
+    fore_learning_rate: float = 1e-3
+    fore_weight_decay: float = 1e-3
+    fore_iteration_budgets: tuple[int, ...] = (30, 100, 300)
+    fore_batch_size: int = 512
+    fore_optimizer_steps: int = 5
+    fore_target_action_draws: int = 4
+    fore_logit_clip: float = 10.0
+    fore_grad_clip_norm: float = 10.0
+    fore_device: str = "cpu"
+    # Deterministic neural optimization budget. The paired full-data audit at
+    # n=100,000 changes the estimate by only 0.0017 RMSE while reducing ratio
+    # fit time about 3.4-fold. Policy fitting and outer-fold inference use all
+    # assigned rows. Zero remains available as a full-data diagnostic.
+    fore_max_training_rows: int = 20_000
+    fore_signed_mass_tolerance: float = 1e-10
+    data_fusion_policy_mode: str = "known-logging"
+    data_fusion_transition_mode: str = "sieve"
+    data_fusion_g_mode: str = "frozen"
+    data_fusion_ratio_mode: str = "neural-fore"
+    data_fusion_repeated_splits: int = 1
+    data_fusion_probability_floor: float = 0.02
+    mc_sample_sizes: tuple[int, ...] = (2500, 5000, 10000)
+    mc_repetitions: int = 300
     use_oracle_cache: bool = True
     oracle_cache_dir: str = "/tmp/rl_evaluation_suite_jrssb_cache"
 
@@ -1049,6 +1319,40 @@ class SingleRunResult:
     nu_ratio_q01: float
     nu_ratio_q50: float
     nu_ratio_q99: float
+    fore_selected_iterations: float = float("nan")
+    fore_apbv_score: float = float("nan")
+    fore_fit_seconds: float = float("nan")
+    fore_training_rows: float = float("nan")
+    fore_normalized_mass: float = float("nan")
+    fore_logit_cap_fraction: float = float("nan")
+    signed_positive_iterations: float = float("nan")
+    signed_negative_iterations: float = float("nan")
+    signed_positive_mass: float = float("nan")
+    signed_negative_mass: float = float("nan")
+    signed_positive_apbv_score: float = float("nan")
+    signed_negative_apbv_score: float = float("nan")
+    signed_positive_fit_seconds: float = float("nan")
+    signed_negative_fit_seconds: float = float("nan")
+    signed_positive_normalized_mass: float = float("nan")
+    signed_negative_normalized_mass: float = float("nan")
+    signed_positive_ess: float = float("nan")
+    signed_negative_ess: float = float("nan")
+    signed_positive_ratio_q99: float = float("nan")
+    signed_negative_ratio_q99: float = float("nan")
+    signed_positive_logit_cap_fraction: float = float("nan")
+    signed_negative_logit_cap_fraction: float = float("nan")
+    ratio_failure: float = 0.0
+    fore_selected_iterations_by_fold: str = ""
+    fore_apbv_scores_by_fold: str = ""
+    signed_positive_iterations_by_fold: str = ""
+    signed_negative_iterations_by_fold: str = ""
+    signed_positive_apbv_scores_by_fold: str = ""
+    signed_negative_apbv_scores_by_fold: str = ""
+    failure_message: str = ""
+    iid_estimated_se: float = float("nan")
+    fold_cluster_estimated_se: float = float("nan")
+    crossfit_fold_count: float = float("nan")
+    ci_critical_value: float = float("nan")
 
     def as_dict(self) -> Dict[str, float | str | int]:
         return asdict(self)
@@ -1071,14 +1375,49 @@ class ProbabilityPolicyAdapter:
 class JRSSBOracle:
     def __init__(self, config: Optional[JRSSBConfig] = None) -> None:
         self.config = JRSSBConfig() if config is None else config
-        if self.config.example1a_policy_estimator not in EXAMPLE1A_POLICY_ESTIMATORS:
+        if self.config.example1a_policy_estimator not in SUPPORTED_EXAMPLE1A_POLICY_ESTIMATORS:
             raise ValueError(f"Unknown example 1a policy estimator: {self.config.example1a_policy_estimator}")
-        if self.config.example1b_policy_estimator not in EXAMPLE1B_POLICY_ESTIMATORS:
+        if self.config.example1b_policy_estimator not in SUPPORTED_EXAMPLE1B_POLICY_ESTIMATORS:
             raise ValueError(f"Unknown example 1b policy estimator: {self.config.example1b_policy_estimator}")
         if self.config.example2_policy_estimator not in EXAMPLE2_POLICY_ESTIMATORS:
             raise ValueError(f"Unknown example 2 policy estimator: {self.config.example2_policy_estimator}")
+        if self.config.main_sieve_mode not in ("fixed-quadratic", "selected"):
+            raise ValueError(f"Unknown main sieve mode: {self.config.main_sieve_mode}")
+        if self.config.main_sieve_degree < 1 or self.config.main_sieve_c <= 0.0:
+            raise ValueError("Main sieve degree and C must be positive.")
+        if self.config.fore_max_training_rows < 0:
+            raise ValueError("fore_max_training_rows must be nonnegative.")
         if self.config.nuisance_sample_mode not in NUISANCE_SAMPLE_MODES:
             raise ValueError(f"Unknown nuisance sample mode: {self.config.nuisance_sample_mode}")
+        if self.config.crossfit_se_method not in CROSSFIT_SE_METHODS:
+            raise ValueError(f"Unknown cross-fit SE method: {self.config.crossfit_se_method}")
+        if self.config.crossfit_ci_method not in CROSSFIT_CI_METHODS:
+            raise ValueError(f"Unknown cross-fit CI method: {self.config.crossfit_ci_method}")
+        if self.config.data_fusion_policy_mode not in DATA_FUSION_POLICY_MODES:
+            raise ValueError(
+                f"Unknown data-fusion policy mode: {self.config.data_fusion_policy_mode}"
+            )
+        if self.config.data_fusion_transition_mode not in DATA_FUSION_TRANSITION_MODES:
+            raise ValueError(
+                "Unknown data-fusion transition mode: "
+                f"{self.config.data_fusion_transition_mode}"
+            )
+        if self.config.data_fusion_g_mode not in DATA_FUSION_G_MODES:
+            raise ValueError(f"Unknown data-fusion g mode: {self.config.data_fusion_g_mode}")
+        if self.config.data_fusion_ratio_mode not in DATA_FUSION_RATIO_MODES:
+            raise ValueError(
+                f"Unknown data-fusion ratio mode: {self.config.data_fusion_ratio_mode}"
+            )
+        if not 0.0 <= self.config.data_fusion_target_gamma < 1.0:
+            raise ValueError("data_fusion_target_gamma must lie in [0, 1).")
+        if self.config.data_fusion_repeated_splits < 1:
+            raise ValueError("data_fusion_repeated_splits must be positive.")
+        if not 0.0 < self.config.data_fusion_probability_floor < 0.25:
+            raise ValueError("data_fusion_probability_floor must lie in (0, 0.25).")
+        if self.config.behavior_policy_design not in BEHAVIOR_POLICY_DESIGNS:
+            raise ValueError(
+                f"Unknown behavior-policy design: {self.config.behavior_policy_design}"
+            )
         self.main_grid = Grid2D(self.config.state_low, self.config.state_high, self.config.main_grid_points)
         self.coarse_grid = Grid2D(self.config.state_low, self.config.state_high, self.config.coarse_grid_points)
         self.allowed_mask = np.zeros(self.config.n_actions, dtype=bool)
@@ -1094,8 +1433,10 @@ class JRSSBOracle:
             "main_grid_points": self.config.main_grid_points,
             "coarse_grid_points": self.config.coarse_grid_points,
             "n_actions": self.config.n_actions,
+            "behavior_policy_design": self.config.behavior_policy_design,
             "gamma_behavior": self.config.gamma_behavior,
             "gamma_example2": self.config.gamma_example2,
+            "data_fusion_target_gamma": self.config.data_fusion_target_gamma,
             "tau_behavior": self.config.tau_behavior,
             "tau_star": self.config.tau_star,
             "noise_scale": self.config.noise_scale,
@@ -1105,7 +1446,10 @@ class JRSSBOracle:
             "max_iterations": self.config.max_iterations,
             "ratio_tol": self.config.ratio_tol,
             "fixed_policy_temperature": self.config.fixed_policy_temperature,
-            "version": 5,
+            # Version 7 truth arrays remain valid. The corrected signed
+            # state-action objects are deterministic transforms of cached
+            # eta/Q/policy arrays and are reconstructed on load below.
+            "version": 7,
         }
         key = hashlib.sha256(json.dumps(relevant, sort_keys=True).encode("utf-8")).hexdigest()[:16]
         return ROOT / self.config.oracle_cache_dir / f"oracle_{key}.pkl"
@@ -1139,6 +1483,8 @@ class JRSSBOracle:
             "psi_2": self.psi_2,
             "eta_fix_gamma_prime": self.eta_fix_gamma_prime,
             "rho_fix_gamma_prime": self.rho_fix_gamma_prime,
+            "eta_fix_data_fusion": self.eta_fix_data_fusion,
+            "rho_fix_data_fusion": self.rho_fix_data_fusion,
             "q_star_soft": self.q_star_soft,
             "v_star_soft_state": self.v_star_soft_state,
             "pi_star": self.pi_star,
@@ -1148,8 +1494,10 @@ class JRSSBOracle:
             "psi_1b": self.psi_1b,
             "eta_star": self.eta_star,
             "rho_star": self.rho_star,
+            "d_star": self.d_star,
             "tilde_eta_star": self.tilde_eta_star,
             "tilde_rho_star": self.tilde_rho_star,
+            "tilde_d_star": self.tilde_d_star,
         }
         with cache_file.open("wb") as handle:
             pickle.dump(payload, handle, protocol=pickle.HIGHEST_PROTOCOL)
@@ -1168,6 +1516,13 @@ class JRSSBOracle:
             if key.startswith("transition_factors"):
                 continue
             setattr(self, key, value)
+        behavior_joint = (
+            np.clip(self.stationary_behavior, EPS, None)[:, None]
+            * np.clip(self.pi0, EPS, None)
+        )
+        self.d_star = self.eta_star[:, None] * self.pi_star / behavior_joint
+        self.tilde_d_star = self._compute_tilde_d_star()
+        self.tilde_rho_star = np.sum(self.pi0 * self.tilde_d_star, axis=1)
         return True
 
     def _compute_truth_bundle(self) -> None:
@@ -1175,11 +1530,22 @@ class JRSSBOracle:
         self._transition_factors_coarse = self._build_transition_factors(self.coarse_grid)
 
         self.reward_dagger = self._reward_dagger(self.main_grid.states)
-        self.q_behavior_soft, self.v_behavior_soft, self.pi0 = self.solve_soft_optimal_policy(
-            reward_grid=self.reward_dagger,
-            tau=self.config.tau_behavior,
-            allowed_mask=np.ones(self.config.n_actions, dtype=bool),
-        )
+        if self.config.behavior_policy_design == "soft-mdp-stress":
+            (
+                self.q_behavior_soft,
+                self.v_behavior_soft,
+                self.pi0,
+            ) = self.solve_soft_optimal_policy(
+                reward_grid=self.reward_dagger,
+                tau=self.config.tau_behavior,
+                allowed_mask=np.ones(self.config.n_actions, dtype=bool),
+            )
+        else:
+            self.pi0 = self._quadratic_logit_behavior_policy(self.main_grid.states)
+            # These fields are retained for cache compatibility; inference uses
+            # pi0 and its normalized reward r0 below.
+            self.q_behavior_soft = np.log(np.clip(self.pi0, EPS, None))
+            self.v_behavior_soft = np.zeros(self.main_grid.n_states, dtype=float)
         self.r0 = np.log(np.clip(self.pi0, EPS, None))
         self.pi_fix = self._fixed_policy_probs(self.main_grid.states)
         self.nu = self._reference_policy_probs(self.main_grid.states)
@@ -1200,6 +1566,14 @@ class JRSSBOracle:
             self.config.gamma_example2,
         )
         self.rho_fix_gamma_prime = self.eta_fix_gamma_prime / np.clip(self.stationary_behavior, EPS, None)
+        self.eta_fix_data_fusion = self.discounted_state_visitation(
+            self.stationary_behavior,
+            self.pi_fix,
+            self.config.data_fusion_target_gamma,
+        )
+        self.rho_fix_data_fusion = self.eta_fix_data_fusion / np.clip(
+            self.stationary_behavior, EPS, None
+        )
 
         self.q_star_soft, self.v_star_soft_state, self.pi_star = self.solve_soft_optimal_policy(
             reward_grid=self.r0,
@@ -1211,8 +1585,14 @@ class JRSSBOracle:
         self.psi_1b = float(np.dot(self.stationary_behavior, self.v_1b))
         self.eta_star = self.discounted_state_visitation(self.stationary_behavior, self.pi_star, self.config.gamma_behavior)
         self.rho_star = self.eta_star / np.clip(self.stationary_behavior, EPS, None)
+        behavior_joint = (
+            np.clip(self.stationary_behavior, EPS, None)[:, None]
+            * np.clip(self.pi0, EPS, None)
+        )
+        self.d_star = self.eta_star[:, None] * self.pi_star / behavior_joint
         self.tilde_eta_star = self._compute_tilde_eta_star()
-        self.tilde_rho_star = self.tilde_eta_star / np.clip(self.stationary_behavior, EPS, None)
+        self.tilde_d_star = self._compute_tilde_d_star()
+        self.tilde_rho_star = np.sum(self.pi0 * self.tilde_d_star, axis=1)
 
     def _build_transition_factors(self, grid: Grid2D) -> Dict[str, np.ndarray]:
         n_states = grid.n_states
@@ -1268,6 +1648,22 @@ class JRSSBOracle:
         reward[:, 2] = 1.2 * np.tanh(0.90 * x - 0.80 * z - 0.15 * x * z - 0.60)
         reward[:, 3] = 1.2 * np.tanh(-0.45 * x + 0.30 * z - 0.05 * x**2 - 0.10)
         return reward
+
+    def _quadratic_logit_behavior_policy(self, states: np.ndarray) -> np.ndarray:
+        """Well-overlapped behavior policy in the correctly specified sieve."""
+        states = np.asarray(states, dtype=float)
+        x = states[:, 0]
+        z = states[:, 1]
+        logits = np.zeros((states.shape[0], self.config.n_actions), dtype=float)
+        # Action 2 is intentionally uncommon because the adaptive target is
+        # restricted to actions (0, 1, 3); the remaining logits retain smooth,
+        # nontrivial state dependence without creating an artificial overlap
+        # failure in the main finite-sample experiment.
+        logits[:, 1] = 0.12 + 0.08 * x - 0.05 * z + 0.02 * x * z
+        logits[:, 2] = -1.80 - 0.03 * x + 0.04 * z - 0.01 * x**2
+        logits[:, 3] = -0.05 + 0.04 * x + 0.06 * z + 0.015 * x * z
+        logits -= np.max(logits, axis=1, keepdims=True)
+        return clip_and_normalize(np.exp(logits))
 
     def transition_mean(self, states: np.ndarray, actions: np.ndarray) -> np.ndarray:
         states = np.asarray(states, dtype=float)
@@ -1468,6 +1864,7 @@ class JRSSBOracle:
         return visitation / np.clip(self.stationary_behavior, EPS, None)
 
     def _compute_tilde_eta_star(self) -> np.ndarray:
+        """Return the strictly future signed state measure."""
         advantage = self.q_1b - self.v_1b[:, None]
         weights = self.eta_star[:, None] * self.pi_star * advantage
         source = self.pushforward_weighted_actions(weights)
@@ -1477,6 +1874,84 @@ class JRSSBOracle:
             self.config.gamma_behavior,
         )
         return tilde_eta
+
+    def _compute_tilde_d_star(self) -> np.ndarray:
+        """Return the full current-plus-future signed state-action ratio."""
+        behavior_joint = (
+            np.clip(self.stationary_behavior, EPS, None)[:, None]
+            * np.clip(self.pi0, EPS, None)
+        )
+        advantage = self.q_1b - self.v_1b[:, None]
+        current = self.eta_star[:, None] * self.pi_star * advantage
+        future = self.tilde_eta_star[:, None] * self.pi_star
+        return (current + future) / behavior_joint
+
+    def signed_jordan_oracle_diagnostic(self) -> Dict[str, float]:
+        """Check the signed-FORE Jordan convention against the oracle grid.
+
+        Each positive component below is the population target of the
+        corresponding positive FORE fit. Recombining the two normalized
+        ratios with ``gamma / (1 - gamma)`` recovers the strictly future
+        component; adding the current ``d * (q - V)`` term must recover the
+        full signed state--action representer used by the Example 1b EIF.
+        """
+        gamma = self.config.gamma_behavior
+        # Match the simulator's stable factorized ratio convention exactly;
+        # clipping the joint product would define a different tail ratio.
+        behavior_joint = (
+            np.clip(self.stationary_behavior, EPS, None)[:, None]
+            * np.clip(self.pi0, EPS, None)
+        )
+        advantage = self.q_1b - self.v_1b[:, None]
+        signed_action_source = self.eta_star[:, None] * self.pi_star * advantage
+        positive_source = np.maximum(signed_action_source, 0.0)
+        negative_source = np.maximum(-signed_action_source, 0.0)
+
+        def normalized_component(action_source: np.ndarray) -> tuple[float, np.ndarray]:
+            mass = float(np.sum(action_source))
+            if mass <= self.config.fore_signed_mass_tolerance:
+                return mass, np.zeros_like(action_source)
+            pushed = self.pushforward_weighted_actions(action_source / mass)
+            visitation = self.generalized_discounted_pushforward(
+                pushed,
+                self.pi_star,
+                gamma,
+            )
+            normalized_ratio = (
+                (1.0 - gamma)
+                * visitation[:, None]
+                * self.pi_star
+                / behavior_joint
+            )
+            return mass, normalized_ratio
+
+        positive_mass, positive_ratio = normalized_component(positive_source)
+        negative_mass, negative_ratio = normalized_component(negative_source)
+        reconstructed_future = (gamma / (1.0 - gamma)) * (
+            positive_mass * positive_ratio - negative_mass * negative_ratio
+        )
+        oracle_future = (
+            self.tilde_eta_star[:, None] * self.pi_star / behavior_joint
+        )
+        reconstructed = signed_action_source / behavior_joint + reconstructed_future
+        future_error = reconstructed_future - oracle_future
+        error = reconstructed - self.tilde_d_star
+        reconstructed_state = np.sum(self.pi0 * reconstructed, axis=1)
+        return {
+            "signed_jordan_positive_mass": positive_mass,
+            "signed_jordan_negative_mass": negative_mass,
+            "signed_jordan_future_ratio_rmse": float(
+                np.sqrt(np.mean(np.square(future_error)))
+            ),
+            "signed_jordan_future_ratio_sup_error": float(
+                np.max(np.abs(future_error))
+            ),
+            "signed_jordan_ratio_rmse": float(np.sqrt(np.mean(np.square(error)))),
+            "signed_jordan_ratio_sup_error": float(np.max(np.abs(error))),
+            "signed_jordan_state_marginal_sup_error": float(
+                np.max(np.abs(reconstructed_state - self.tilde_rho_star))
+            ),
+        }
 
     def truth_for_example(self, example_id: str) -> float:
         if example_id == "1a":
@@ -1658,22 +2133,45 @@ class JRSSBOracle:
         v_star = self.action_values(states, self.v_star)
         v_star_next = self.action_values(next_states, self.v_star)
         rho_star = self.state_values(states, self.rho_star)
-        tilde_rho_star = self.state_values(states, self.tilde_rho_star)
         pi_star_ratio = pi_star[np.arange(large_n), actions] / np.clip(pi0[np.arange(large_n), actions], EPS, None)
+        ordinary_all = (
+            rho_star[:, None] * pi_star / np.clip(pi0, EPS, None)
+        )
+        future_tilde_rho_star = self.state_values(
+            states,
+            self.tilde_eta_star / np.clip(self.stationary_behavior, EPS, None),
+        )
+        future_signed_all = (
+            future_tilde_rho_star[:, None]
+            * pi_star
+            / np.clip(pi0, EPS, None)
+        )
+        tilde_d_star, tilde_rho_star = reconstruct_total_signed_ratios(
+            ordinary_all,
+            future_signed_all,
+            q_1b - v_1b[:, None],
+            pi0,
+            actions,
+        )
+        d_star = ordinary_all[np.arange(large_n), actions]
         soft_next = self.config.tau_star * logsumexp(
             (self.action_values(next_states, self.r0) + self.config.gamma_behavior * v_star_next)
             / max(self.config.tau_star, EPS)
             + np.where(self.allowed_mask[None, :], 0.0, -1e12),
             axis=1,
         )
-        contrib_1b = (
-            v_1b
-            + rho_star * pi_star_ratio * (r0_obs + self.config.gamma_behavior * v_1b_next - q_1b[np.arange(large_n), actions])
-            + (self.config.gamma_behavior / self.config.tau_star)
-            * tilde_rho_star
-            * pi_star_ratio
-            * (soft_next - v_star[np.arange(large_n), actions])
-            + ((tilde_rho_star / self.config.tau_star) + rho_star) * (pi_star_ratio - 1.0)
+        contrib_1b = signed_ratio_if_contribution(
+            v_1b,
+            d_star,
+            rho_star,
+            tilde_d_star,
+            tilde_rho_star,
+            r0_obs + self.config.gamma_behavior * v_1b_next - q_1b[
+                np.arange(large_n), actions
+            ],
+            soft_next - v_star[np.arange(large_n), actions],
+            gamma=self.config.gamma_behavior,
+            temperature=self.config.tau_star,
         )
 
         q_nu = self.action_values(states, self.q_nu)
@@ -1724,6 +2222,111 @@ def fold_splits(n: int, seed: int, n_folds: int = 2) -> List[np.ndarray]:
     return [fold.astype(int, copy=False) for fold in np.array_split(perm, n_folds) if fold.size > 0]
 
 
+def fore_candidates_from_config(oracle: JRSSBOracle):
+    """Return the frozen hyperparameters and predeclared stopping budgets."""
+    return paper_early_stopping_candidates(
+        hidden_dims=tuple(oracle.config.fore_hidden_sizes),
+        learning_rate=float(oracle.config.fore_learning_rate),
+        weight_decay=float(oracle.config.fore_weight_decay),
+        iteration_budgets=tuple(oracle.config.fore_iteration_budgets),
+    )
+
+
+def fore_options_from_config(oracle: JRSSBOracle) -> FOREFitOptions:
+    """Return fixed minibatch FORE numerical settings."""
+    return FOREFitOptions(
+        batch_size=int(oracle.config.fore_batch_size),
+        optimizer_steps=int(oracle.config.fore_optimizer_steps),
+        target_action_draws=int(oracle.config.fore_target_action_draws),
+        logit_clip=float(oracle.config.fore_logit_clip),
+        grad_clip_norm=float(oracle.config.fore_grad_clip_norm),
+        device=str(oracle.config.fore_device),
+    )
+
+
+def deterministic_fore_training_indices(
+    n_rows: int,
+    *,
+    max_rows: int,
+    seed: int,
+) -> np.ndarray:
+    """Return a truth-blind fixed-size FORE training view.
+
+    The cap affects only neural ratio fitting. Policy/value nuisances and the
+    untouched outer evaluation fold continue to use their full assigned rows.
+    """
+    n_rows = int(n_rows)
+    max_rows = int(max_rows)
+    if n_rows <= 0:
+        raise ValueError("n_rows must be positive.")
+    if max_rows < 0:
+        raise ValueError("max_rows must be nonnegative.")
+    if max_rows == 0 or n_rows <= max_rows:
+        return np.arange(n_rows, dtype=int)
+    rng = np.random.default_rng(int(seed))
+    return np.sort(rng.choice(n_rows, size=max_rows, replace=False)).astype(
+        int, copy=False
+    )
+
+
+def exact_adaptive_ratio_bundle(
+    oracle: JRSSBOracle,
+    target_policy_grid: np.ndarray,
+    gamma: float,
+    *,
+    q_grid: Optional[np.ndarray] = None,
+    v_grid: Optional[np.ndarray] = None,
+) -> Dict[str, np.ndarray]:
+    """Compute diagnostic exact ratios for a fold-estimated target policy.
+
+    This helper uses the simulation transition kernel and true behavior law and
+    is therefore forbidden as an ordinary estimator. It provides a coherent
+    oracle upper bound when the target policy itself depends on an estimated
+    behavior policy.
+    """
+    target_policy_grid = clip_and_normalize(target_policy_grid)
+    eta = oracle.discounted_state_visitation(
+        oracle.stationary_behavior,
+        target_policy_grid,
+        gamma,
+    )
+    behavior_joint = (
+        np.clip(oracle.stationary_behavior, EPS, None)[:, None]
+        * np.clip(oracle.pi0, EPS, None)
+    )
+    output = {
+        "eta": eta,
+        "rho": eta / np.clip(oracle.stationary_behavior, EPS, None),
+        "d": eta[:, None] * target_policy_grid / behavior_joint,
+    }
+    if (q_grid is None) != (v_grid is None):
+        raise ValueError("q_grid and v_grid must be supplied together.")
+    if q_grid is None or v_grid is None:
+        return output
+    q_grid = np.asarray(q_grid, dtype=float)
+    v_grid = np.asarray(v_grid, dtype=float).reshape(-1)
+    if q_grid.shape != target_policy_grid.shape or v_grid.size != q_grid.shape[0]:
+        raise ValueError("Adaptive signed-ratio Q/V arrays have invalid shapes.")
+    advantage = q_grid - v_grid[:, None]
+    action_source = eta[:, None] * target_policy_grid * advantage
+    pushed_source = oracle.pushforward_weighted_actions(action_source)
+    tilde_eta = gamma * oracle.generalized_discounted_pushforward(
+        pushed_source,
+        target_policy_grid,
+        gamma,
+    )
+    future_tilde_d = tilde_eta[:, None] * target_policy_grid / behavior_joint
+    tilde_d = action_source / behavior_joint + future_tilde_d
+    output["tilde_eta"] = tilde_eta
+    output["future_tilde_d"] = future_tilde_d
+    output["tilde_rho_future"] = tilde_eta / np.clip(
+        oracle.stationary_behavior, EPS, None
+    )
+    output["tilde_d"] = tilde_d
+    output["tilde_rho"] = np.sum(oracle.pi0 * tilde_d, axis=1)
+    return output
+
+
 def combine_transition_samples(
     train_data: Dict[str, np.ndarray],
     eval_data: Dict[str, np.ndarray],
@@ -1770,12 +2373,21 @@ def finalize_single_run_result(
     pi0_action0_parts: Sequence[np.ndarray],
     pi_ratio_parts: Sequence[np.ndarray],
     nu_ratio_parts: Sequence[np.ndarray],
+    fold_indices: Optional[Sequence[np.ndarray]] = None,
 ) -> SingleRunResult:
     plugin_estimate = float(np.mean(contributions_plugin))
     if_estimate = float(np.mean(contributions_if))
-    estimated_if = contributions_if - if_estimate
-    estimated_se = float(np.std(estimated_if, ddof=1) / math.sqrt(n))
-    ci_halfwidth = ci_critical_value_for_example(oracle, example_id) * estimated_se
+    se_diagnostics = crossfit_se_diagnostics(contributions_if, fold_indices)
+    estimated_se = selected_crossfit_se(
+        se_diagnostics,
+        oracle.config.crossfit_se_method,
+    )
+    critical_value = crossfit_critical_value(
+        ci_critical_value_for_example(oracle, example_id),
+        int(se_diagnostics["fold_count"]),
+        oracle.config.crossfit_ci_method,
+    )
+    ci_halfwidth = critical_value * estimated_se
     ci_lower = if_estimate - ci_halfwidth
     ci_upper = if_estimate + ci_halfwidth
     truth = oracle.truth_for_example(example_id)
@@ -1822,7 +2434,97 @@ def finalize_single_run_result(
         nu_ratio_q01=float(nu_ratio_quantiles[0]),
         nu_ratio_q50=float(nu_ratio_quantiles[1]),
         nu_ratio_q99=float(nu_ratio_quantiles[2]),
+        iid_estimated_se=float(se_diagnostics["iid_se"]),
+        fold_cluster_estimated_se=float(se_diagnostics["fold_cluster_se"]),
+        crossfit_fold_count=float(se_diagnostics["fold_count"]),
+        ci_critical_value=critical_value,
     )
+
+
+def attach_fore_diagnostics(
+    result: SingleRunResult,
+    diagnostics_parts: Sequence[Dict[str, float]],
+) -> SingleRunResult:
+    """Attach fold-averaged FORE telemetry to a simulation row."""
+    if not diagnostics_parts:
+        return result
+
+    def average(key: str) -> float:
+        values = np.asarray(
+            [part.get(key, np.nan) for part in diagnostics_parts], dtype=float
+        )
+        return safe_nanmean(values)
+
+    result.fore_selected_iterations = average("selected_iterations")
+    result.fore_apbv_score = average("apbv_score")
+    result.fore_fit_seconds = average("fit_seconds")
+    result.fore_training_rows = average("training_rows")
+    result.fore_normalized_mass = average("normalized_mass")
+    result.fore_logit_cap_fraction = average("logit_cap_fraction")
+    result.signed_positive_iterations = average("signed_positive_iterations")
+    result.signed_negative_iterations = average("signed_negative_iterations")
+    result.signed_positive_mass = average("signed_positive_mass")
+    result.signed_negative_mass = average("signed_negative_mass")
+    result.signed_positive_apbv_score = average("signed_positive_apbv_score")
+    result.signed_negative_apbv_score = average("signed_negative_apbv_score")
+    result.signed_positive_fit_seconds = average("signed_positive_fit_seconds")
+    result.signed_negative_fit_seconds = average("signed_negative_fit_seconds")
+    result.signed_positive_normalized_mass = average(
+        "signed_positive_normalized_mass"
+    )
+    result.signed_negative_normalized_mass = average(
+        "signed_negative_normalized_mass"
+    )
+    result.signed_positive_ess = average("signed_positive_ess")
+    result.signed_negative_ess = average("signed_negative_ess")
+    result.signed_positive_ratio_q99 = average("signed_positive_ratio_q99")
+    result.signed_negative_ratio_q99 = average("signed_negative_ratio_q99")
+    result.signed_positive_logit_cap_fraction = average(
+        "signed_positive_logit_cap_fraction"
+    )
+    result.signed_negative_logit_cap_fraction = average(
+        "signed_negative_logit_cap_fraction"
+    )
+    result.ratio_failure = float(any(part.get("nonfinite", False) for part in diagnostics_parts))
+    result.fore_selected_iterations_by_fold = json.dumps(
+        [int(part["selected_iterations"]) for part in diagnostics_parts]
+    )
+    result.fore_apbv_scores_by_fold = json.dumps(
+        [float(part["apbv_score"]) for part in diagnostics_parts]
+    )
+    result.signed_positive_iterations_by_fold = json.dumps(
+        [
+            None
+            if not np.isfinite(float(part.get("signed_positive_iterations", np.nan)))
+            else int(part["signed_positive_iterations"])
+            for part in diagnostics_parts
+        ]
+    )
+    result.signed_negative_iterations_by_fold = json.dumps(
+        [
+            None
+            if not np.isfinite(float(part.get("signed_negative_iterations", np.nan)))
+            else int(part["signed_negative_iterations"])
+            for part in diagnostics_parts
+        ]
+    )
+    result.signed_positive_apbv_scores_by_fold = json.dumps(
+        [
+            None
+            if not np.isfinite(float(part.get("signed_positive_apbv_score", np.nan)))
+            else float(part["signed_positive_apbv_score"])
+            for part in diagnostics_parts
+        ]
+    )
+    result.signed_negative_apbv_scores_by_fold = json.dumps(
+        [
+            None
+            if not np.isfinite(float(part.get("signed_negative_apbv_score", np.nan)))
+            else float(part["signed_negative_apbv_score"])
+            for part in diagnostics_parts
+        ]
+    )
+    return result
 
 
 def reward_rmse(states: np.ndarray, reward_hat: np.ndarray, oracle: JRSSBOracle, example_id: str) -> float:
@@ -2006,9 +2708,58 @@ def evaluate_fold_example_1a(
         v_next = oracle.state_values(next_states_eval, v_grid)
         r_obs_eval = np.log(np.clip(probs_eval[np.arange(eval_idx.shape[0]), actions_eval], EPS, None))
 
+        pi_fix_eval = oracle._fixed_policy_probs(states_eval)
+        pi_ratio = pi_fix_eval[np.arange(eval_idx.shape[0]), actions_eval] / np.clip(
+            probs_eval[np.arange(eval_idx.shape[0]), actions_eval],
+            EPS,
+            None,
+        )
+        fore_diag: Dict[str, float] = {}
         if ratio_mode == "oracle":
             rho_eval = oracle.state_values(states_eval, oracle.rho_fix)
-        else:
+            d_eval = rho_eval * pi_ratio
+        elif ratio_mode == "oracle-adaptive":
+            rho_eval = oracle.state_values(states_eval, oracle.rho_fix)
+            # Evaluate the estimated EIF: the target occupancy is exact, while
+            # the action denominator remains the fitted behavior policy.  This
+            # score term is what removes first-order policy-estimation error.
+            d_eval = rho_eval * pi_ratio
+        elif ratio_mode == "neural-fore":
+            target_policy = make_policy_adapter(oracle, deterministic_fn=oracle._fixed_policy_probs)
+            fore_idx = deterministic_fore_training_indices(
+                train_idx.shape[0],
+                max_rows=oracle.config.fore_max_training_rows,
+                seed=seed + 677,
+            )
+            fore_states = data["states"][train_idx][fore_idx]
+            fore_actions = data["actions"][train_idx][fore_idx]
+            fore_next_states = data["next_states"][train_idx][fore_idx]
+            local_split = deterministic_three_way_split(fore_idx.shape[0], seed + 701)
+            selected_fore = fit_selected_fore_ratio(
+                states=fore_states,
+                actions=fore_actions,
+                next_states=fore_next_states,
+                target_policy=target_policy,
+                gamma=oracle.config.gamma_behavior,
+                n_actions=oracle.config.n_actions,
+                candidates=fore_candidates_from_config(oracle),
+                seed=seed + 809,
+                options=fore_options_from_config(oracle),
+                split=local_split,
+            )
+            d_eval = selected_fore.ratio.predict_unnormalized(states_eval, actions_eval)
+            rho_eval = selected_fore.ratio.predict_state_ratio(states_eval, probs_eval)
+            fore_diag = ratio_diagnostics(
+                selected_fore.ratio,
+                data["states"][train_idx],
+                data["actions"][train_idx],
+            )
+            fore_diag["apbv_score"] = float(
+                selected_fore.selection.worst_case_scores[selected_fore.selection.selected_index]
+            )
+            fore_diag["fit_seconds"] = selected_fore.total_fit_seconds
+            fore_diag["training_rows"] = float(fore_idx.shape[0])
+        elif ratio_mode == "coarse-estimated":
             coarse_bundle = oracle.estimate_coarse_ratio_bundle(
                 states=data["states"][train_idx],
                 actions=data["actions"][train_idx],
@@ -2017,18 +2768,15 @@ def evaluate_fold_example_1a(
                 gamma=oracle.config.gamma_behavior,
             )
             rho_eval = oracle.coarse_grid.interpolate(coarse_bundle["rho"], states_eval)
-
-        pi_fix_eval = oracle._fixed_policy_probs(states_eval)
-        pi_ratio = pi_fix_eval[np.arange(eval_idx.shape[0]), actions_eval] / np.clip(
-            probs_eval[np.arange(eval_idx.shape[0]), actions_eval],
-            EPS,
-            None,
-        )
+            d_eval = rho_eval * pi_ratio
+        else:
+            raise ValueError(f"Unknown ratio mode: {ratio_mode}")
         contributions_plugin = v_eval
-        contributions_if = (
-            v_eval
-            + rho_eval * pi_ratio * (r_obs_eval + oracle.config.gamma_behavior * v_next - q_sa_eval)
-            + rho_eval * (pi_ratio - 1.0)
+        contributions_if = ordinary_ratio_if_contribution(
+            v_eval,
+            d_eval,
+            rho_eval,
+            r_obs_eval + oracle.config.gamma_behavior * v_next - q_sa_eval,
         )
         bellman = r_obs_eval + oracle.config.gamma_behavior * v_next - q_sa_eval
         return {
@@ -2037,7 +2785,8 @@ def evaluate_fold_example_1a(
             "reward_grid": reward_grid,
             "reward_eval": np.log(np.clip(probs_eval, EPS, None)),
             "bellman": bellman,
-            "ratio": rho_eval * pi_ratio,
+            "ratio": d_eval,
+            "fore_diagnostics": fore_diag,
         }
 
     if oracle.config.example1a_nuisance_method != "neural-fqe":
@@ -2081,9 +2830,54 @@ def evaluate_fold_example_1a(
     v_next = np.sum(pi_fix_next * q_all_next, axis=1)
     r_obs_eval = np.log(np.clip(probs_eval[np.arange(eval_idx.shape[0]), actions_eval], EPS, None))
 
+    pi_ratio = pi_fix_eval[np.arange(eval_idx.shape[0]), actions_eval] / np.clip(
+        probs_eval[np.arange(eval_idx.shape[0]), actions_eval],
+        EPS,
+        None,
+    )
+    fore_diag: Dict[str, float] = {}
     if ratio_mode == "oracle":
         rho_eval = oracle.state_values(states_eval, oracle.rho_fix)
-    else:
+        d_eval = rho_eval * pi_ratio
+    elif ratio_mode == "oracle-adaptive":
+        rho_eval = oracle.state_values(states_eval, oracle.rho_fix)
+        d_eval = rho_eval * pi_ratio
+    elif ratio_mode == "neural-fore":
+        target_policy = make_policy_adapter(oracle, deterministic_fn=oracle._fixed_policy_probs)
+        fore_idx = deterministic_fore_training_indices(
+            train_idx.shape[0],
+            max_rows=oracle.config.fore_max_training_rows,
+            seed=seed + 677,
+        )
+        fore_states = data["states"][train_idx][fore_idx]
+        fore_actions = data["actions"][train_idx][fore_idx]
+        fore_next_states = data["next_states"][train_idx][fore_idx]
+        local_split = deterministic_three_way_split(fore_idx.shape[0], seed + 701)
+        selected_fore = fit_selected_fore_ratio(
+            states=fore_states,
+            actions=fore_actions,
+            next_states=fore_next_states,
+            target_policy=target_policy,
+            gamma=oracle.config.gamma_behavior,
+            n_actions=oracle.config.n_actions,
+            candidates=fore_candidates_from_config(oracle),
+            seed=seed + 809,
+            options=fore_options_from_config(oracle),
+            split=local_split,
+        )
+        d_eval = selected_fore.ratio.predict_unnormalized(states_eval, actions_eval)
+        rho_eval = selected_fore.ratio.predict_state_ratio(states_eval, probs_eval)
+        fore_diag = ratio_diagnostics(
+            selected_fore.ratio,
+            data["states"][train_idx],
+            data["actions"][train_idx],
+        )
+        fore_diag["apbv_score"] = float(
+            selected_fore.selection.worst_case_scores[selected_fore.selection.selected_index]
+        )
+        fore_diag["fit_seconds"] = selected_fore.total_fit_seconds
+        fore_diag["training_rows"] = float(fore_idx.shape[0])
+    elif ratio_mode == "coarse-estimated":
         coarse_bundle = oracle.estimate_coarse_ratio_bundle(
             states=data["states"][train_idx],
             actions=data["actions"][train_idx],
@@ -2092,17 +2886,15 @@ def evaluate_fold_example_1a(
             gamma=oracle.config.gamma_behavior,
         )
         rho_eval = oracle.coarse_grid.interpolate(coarse_bundle["rho"], states_eval)
-
-    pi_ratio = pi_fix_eval[np.arange(eval_idx.shape[0]), actions_eval] / np.clip(
-        probs_eval[np.arange(eval_idx.shape[0]), actions_eval],
-        EPS,
-        None,
-    )
+        d_eval = rho_eval * pi_ratio
+    else:
+        raise ValueError(f"Unknown ratio mode: {ratio_mode}")
     contributions_plugin = v_eval
-    contributions_if = (
-        v_eval
-        + rho_eval * pi_ratio * (r_obs_eval + oracle.config.gamma_behavior * v_next - q_sa_eval)
-        + rho_eval * (pi_ratio - 1.0)
+    contributions_if = ordinary_ratio_if_contribution(
+        v_eval,
+        d_eval,
+        rho_eval,
+        r_obs_eval + oracle.config.gamma_behavior * v_next - q_sa_eval,
     )
     bellman = r_obs_eval + oracle.config.gamma_behavior * v_next - q_sa_eval
     return {
@@ -2111,7 +2903,8 @@ def evaluate_fold_example_1a(
         "reward_grid": np.log(np.clip(policy_hat.predict_proba(oracle.main_grid.states), EPS, None)),
         "reward_eval": np.log(np.clip(probs_eval, EPS, None)),
         "bellman": bellman,
-        "ratio": rho_eval * pi_ratio,
+        "ratio": d_eval,
+        "fore_diagnostics": fore_diag,
     }
 
 
@@ -2197,10 +2990,220 @@ def evaluate_fold_example_1b(
         axis=1,
     )
 
+    pi_ratio = pi_star_eval[np.arange(eval_idx.shape[0]), actions_eval] / np.clip(
+        probs_eval[np.arange(eval_idx.shape[0]), actions_eval],
+        EPS,
+        None,
+    )
+    fore_diag: Dict[str, float] = {}
     if ratio_mode == "oracle":
         rho_eval = oracle.state_values(states_eval, oracle.rho_star)
-        tilde_rho_eval = oracle.state_values(states_eval, oracle.tilde_rho_star)
-    else:
+        future_tilde_rho_eval = oracle.state_values(
+            states_eval, oracle.tilde_eta_star / np.clip(oracle.stationary_behavior, EPS, None)
+        )
+        ordinary_all = (
+            rho_eval[:, None]
+            * pi_star_eval
+            / np.clip(probs_eval, EPS, None)
+        )
+        future_signed_all = (
+            future_tilde_rho_eval[:, None]
+            * pi_star_eval
+            / np.clip(probs_eval, EPS, None)
+        )
+        d_eval = ordinary_all[np.arange(eval_idx.shape[0]), actions_eval]
+        tilde_d_eval, tilde_rho_eval = reconstruct_total_signed_ratios(
+            ordinary_all,
+            future_signed_all,
+            q_all_eval - v_eval[:, None],
+            probs_eval,
+            actions_eval,
+        )
+    elif ratio_mode == "oracle-adaptive":
+        if q_hat_grid is None or v_hat_grid is None:
+            raise ValueError(
+                "oracle-adaptive signed ratios require the grid Bellman nuisance."
+            )
+        exact_bundle = exact_adaptive_ratio_bundle(
+            oracle,
+            pi_star_grid,
+            oracle.config.gamma_behavior,
+            q_grid=q_hat_grid,
+            v_grid=v_hat_grid,
+        )
+        rho_eval = oracle.state_values(states_eval, exact_bundle["rho"])
+        future_tilde_rho_eval = oracle.state_values(
+            states_eval, exact_bundle["tilde_rho_future"]
+        )
+        ordinary_all = (
+            rho_eval[:, None]
+            * pi_star_eval
+            / np.clip(probs_eval, EPS, None)
+        )
+        future_signed_all = (
+            future_tilde_rho_eval[:, None]
+            * pi_star_eval
+            / np.clip(probs_eval, EPS, None)
+        )
+        d_eval = ordinary_all[np.arange(eval_idx.shape[0]), actions_eval]
+        tilde_d_eval, tilde_rho_eval = reconstruct_total_signed_ratios(
+            ordinary_all,
+            future_signed_all,
+            q_all_eval - v_eval[:, None],
+            probs_eval,
+            actions_eval,
+        )
+    elif ratio_mode == "neural-fore":
+        target_policy = make_policy_adapter(oracle, policy_grid=pi_star_grid)
+        train_states = data["states"][train_idx]
+        train_actions = data["actions"][train_idx]
+        train_next_states = data["next_states"][train_idx]
+        fore_idx = deterministic_fore_training_indices(
+            train_idx.shape[0],
+            max_rows=oracle.config.fore_max_training_rows,
+            seed=seed + 677,
+        )
+        fore_states = train_states[fore_idx]
+        fore_actions = train_actions[fore_idx]
+        fore_next_states = train_next_states[fore_idx]
+        local_split = deterministic_three_way_split(fore_idx.shape[0], seed + 701)
+        fore_candidates = fore_candidates_from_config(oracle)
+        fore_options = fore_options_from_config(oracle)
+        selected_fore = fit_selected_fore_ratio(
+            states=fore_states,
+            actions=fore_actions,
+            next_states=fore_next_states,
+            target_policy=target_policy,
+            gamma=oracle.config.gamma_behavior,
+            n_actions=oracle.config.n_actions,
+            candidates=fore_candidates,
+            seed=seed + 809,
+            options=fore_options,
+            split=local_split,
+        )
+        if q_hat_grid is not None and v_hat_grid is not None:
+            q_all_fore = oracle.action_values(fore_states, q_hat_grid)
+            v_fore = oracle.state_values(fore_states, v_hat_grid)
+        else:
+            q_all_fore = q_hat.predict_all_actions(fore_states)
+            pi_star_fore = oracle.policy_probs(fore_states, pi_star_grid)
+            v_fore = np.sum(pi_star_fore * q_all_fore, axis=1)
+        q_sa_fore = q_all_fore[np.arange(fore_idx.shape[0]), fore_actions]
+        preliminary_d_fore = selected_fore.selection_ratio.predict_unnormalized(
+            fore_states, fore_actions
+        )
+        final_d_fore = selected_fore.ratio.predict_unnormalized(
+            fore_states, fore_actions
+        )
+        signed_fore = fit_selected_signed_fore_ratio(
+            states=fore_states,
+            actions=fore_actions,
+            next_states=fore_next_states,
+            source_weights=preliminary_d_fore * (q_sa_fore - v_fore),
+            refit_source_weights=final_d_fore * (q_sa_fore - v_fore),
+            target_policy=target_policy,
+            gamma=oracle.config.gamma_behavior,
+            n_actions=oracle.config.n_actions,
+            candidates=fore_candidates,
+            seed=seed + 1_809,
+            split=local_split,
+            options=fore_options,
+            mass_tolerance=oracle.config.fore_signed_mass_tolerance,
+        )
+        d_eval = selected_fore.ratio.predict_unnormalized(states_eval, actions_eval)
+        rho_eval = selected_fore.ratio.predict_state_ratio(states_eval, probs_eval)
+        repeated_states = np.repeat(states_eval, oracle.config.n_actions, axis=0)
+        tiled_actions = np.tile(
+            np.arange(oracle.config.n_actions), states_eval.shape[0]
+        )
+        ordinary_all = selected_fore.ratio.predict_unnormalized(
+            repeated_states, tiled_actions
+        ).reshape(states_eval.shape[0], oracle.config.n_actions)
+        future_signed_all = signed_fore.predict_future_unnormalized(
+            repeated_states, tiled_actions
+        ).reshape(states_eval.shape[0], oracle.config.n_actions)
+        tilde_d_eval, tilde_rho_eval = reconstruct_total_signed_ratios(
+            ordinary_all,
+            future_signed_all,
+            q_all_eval - v_eval[:, None],
+            probs_eval,
+            actions_eval,
+        )
+        fore_diag = ratio_diagnostics(selected_fore.ratio, train_states, train_actions)
+        positive_score = (
+            float(
+                signed_fore.positive_selection.worst_case_scores[
+                    signed_fore.positive_selection.selected_index
+                ]
+            )
+            if signed_fore.positive_selection is not None
+            else np.nan
+        )
+        negative_score = (
+            float(
+                signed_fore.negative_selection.worst_case_scores[
+                    signed_fore.negative_selection.selected_index
+                ]
+            )
+            if signed_fore.negative_selection is not None
+            else np.nan
+        )
+        positive_diagnostics = (
+            ratio_diagnostics(signed_fore.positive, train_states, train_actions)
+            if signed_fore.positive is not None
+            else {}
+        )
+        negative_diagnostics = (
+            ratio_diagnostics(signed_fore.negative, train_states, train_actions)
+            if signed_fore.negative is not None
+            else {}
+        )
+        fore_diag.update(
+            {
+                "apbv_score": float(
+                    selected_fore.selection.worst_case_scores[selected_fore.selection.selected_index]
+                ),
+                "fit_seconds": selected_fore.total_fit_seconds,
+                "training_rows": float(fore_idx.shape[0]),
+                "signed_positive_iterations": float(
+                    signed_fore.positive.candidate.num_iterations
+                    if signed_fore.positive is not None
+                    else np.nan
+                ),
+                "signed_negative_iterations": float(
+                    signed_fore.negative.candidate.num_iterations
+                    if signed_fore.negative is not None
+                    else np.nan
+                ),
+                "signed_positive_mass": float(signed_fore.positive_mass),
+                "signed_negative_mass": float(signed_fore.negative_mass),
+                "signed_positive_apbv_score": positive_score,
+                "signed_negative_apbv_score": negative_score,
+                "signed_positive_fit_seconds": signed_fore.positive_total_fit_seconds,
+                "signed_negative_fit_seconds": signed_fore.negative_total_fit_seconds,
+                "signed_positive_normalized_mass": positive_diagnostics.get(
+                    "normalized_mass", np.nan
+                ),
+                "signed_negative_normalized_mass": negative_diagnostics.get(
+                    "normalized_mass", np.nan
+                ),
+                "signed_positive_ess": positive_diagnostics.get("ess", np.nan),
+                "signed_negative_ess": negative_diagnostics.get("ess", np.nan),
+                "signed_positive_ratio_q99": positive_diagnostics.get(
+                    "ratio_q99", np.nan
+                ),
+                "signed_negative_ratio_q99": negative_diagnostics.get(
+                    "ratio_q99", np.nan
+                ),
+                "signed_positive_logit_cap_fraction": positive_diagnostics.get(
+                    "logit_cap_fraction", np.nan
+                ),
+                "signed_negative_logit_cap_fraction": negative_diagnostics.get(
+                    "logit_cap_fraction", np.nan
+                ),
+            }
+        )
+    elif ratio_mode == "coarse-estimated":
         coarse_bundle = oracle.estimate_coarse_ratio_bundle(
             states=data["states"][train_idx],
             actions=data["actions"][train_idx],
@@ -2211,22 +3214,40 @@ def evaluate_fold_example_1b(
             v_grid=oracle.v_1b,
         )
         rho_eval = oracle.coarse_grid.interpolate(coarse_bundle["rho"], states_eval)
-        tilde_rho_eval = oracle.coarse_grid.interpolate(coarse_bundle.get("tilde_rho", coarse_bundle["rho"]), states_eval)
-
-    pi_ratio = pi_star_eval[np.arange(eval_idx.shape[0]), actions_eval] / np.clip(
-        probs_eval[np.arange(eval_idx.shape[0]), actions_eval],
-        EPS,
-        None,
-    )
+        future_tilde_rho_eval = oracle.coarse_grid.interpolate(
+            coarse_bundle.get("tilde_rho", coarse_bundle["rho"]), states_eval
+        )
+        ordinary_all = (
+            rho_eval[:, None]
+            * pi_star_eval
+            / np.clip(probs_eval, EPS, None)
+        )
+        future_signed_all = (
+            future_tilde_rho_eval[:, None]
+            * pi_star_eval
+            / np.clip(probs_eval, EPS, None)
+        )
+        d_eval = ordinary_all[np.arange(eval_idx.shape[0]), actions_eval]
+        tilde_d_eval, tilde_rho_eval = reconstruct_total_signed_ratios(
+            ordinary_all,
+            future_signed_all,
+            q_all_eval - v_eval[:, None],
+            probs_eval,
+            actions_eval,
+        )
+    else:
+        raise ValueError(f"Unknown ratio mode: {ratio_mode}")
     contributions_plugin = v_eval
-    contributions_if = (
-        v_eval
-        + rho_eval * pi_ratio * (r_obs_eval + oracle.config.gamma_behavior * v_next - q_sa_eval)
-        + (oracle.config.gamma_behavior / oracle.config.tau_star)
-        * tilde_rho_eval
-        * pi_ratio
-        * (soft_next - continuation_eval[np.arange(eval_idx.shape[0]), actions_eval])
-        + ((tilde_rho_eval / oracle.config.tau_star) + rho_eval) * (pi_ratio - 1.0)
+    contributions_if = signed_ratio_if_contribution(
+        v_eval,
+        d_eval,
+        rho_eval,
+        tilde_d_eval,
+        tilde_rho_eval,
+        r_obs_eval + oracle.config.gamma_behavior * v_next - q_sa_eval,
+        soft_next - continuation_eval[np.arange(eval_idx.shape[0]), actions_eval],
+        gamma=oracle.config.gamma_behavior,
+        temperature=oracle.config.tau_star,
     )
     bellman = r_obs_eval + oracle.config.gamma_behavior * v_next - q_sa_eval
     return {
@@ -2235,7 +3256,8 @@ def evaluate_fold_example_1b(
         "reward_grid": reward_grid,
         "reward_eval": np.log(np.clip(probs_eval, EPS, None)),
         "bellman": bellman,
-        "ratio": rho_eval * pi_ratio,
+        "ratio": d_eval,
+        "fore_diagnostics": fore_diag,
     }
 
 
@@ -2676,6 +3698,7 @@ def estimate_example_1a_stabilized(
     reward_rmse_rho_weighted_parts: List[float] = []
     bellman_values: List[np.ndarray] = []
     ratio_parts: List[np.ndarray] = []
+    fore_diagnostics_parts: List[Dict[str, float]] = []
 
     for split_number in range(repeated_splits):
         split_seed = seed + 100_003 * split_number
@@ -2702,6 +3725,9 @@ def estimate_example_1a_stabilized(
             reward_rmse_stationary_parts.append(reward_metrics["reward_rmse_stationary"])
             reward_rmse_rho_weighted_parts.append(reward_metrics["reward_rmse_rho_weighted"])
             ratio_parts.append(np.asarray(fold_result["ratio"], dtype=float))
+            fold_fore = fold_result.get("fore_diagnostics", {})
+            if fold_fore:
+                fore_diagnostics_parts.append(dict(fold_fore))
         stabilized = (1.0 - lam) * contributions_plugin + lam * contributions_if
         plugin_split_estimates.append(float(np.mean(contributions_plugin)))
         stabilized_split_estimates.append(float(np.mean(stabilized)))
@@ -2719,7 +3745,7 @@ def estimate_example_1a_stabilized(
     ratio_values = np.concatenate(ratio_parts) if ratio_parts else np.array([np.nan])
     ratio_quantiles = weighted_quantiles(ratio_values, [0.01, 0.50, 0.99])
     bellman_concat = np.concatenate(bellman_values) if bellman_values else np.array([np.nan])
-    return SingleRunResult(
+    result = SingleRunResult(
         example_id="1a",
         n=n,
         seed=seed,
@@ -2755,6 +3781,7 @@ def estimate_example_1a_stabilized(
         nu_ratio_q50=float("nan"),
         nu_ratio_q99=float("nan"),
     )
+    return attach_fore_diagnostics(result, fore_diagnostics_parts)
 
 
 def estimate_example_1b_stabilized(
@@ -2773,6 +3800,7 @@ def estimate_example_1b_stabilized(
     reward_rmse_rho_weighted_parts: List[float] = []
     bellman_values: List[np.ndarray] = []
     ratio_parts: List[np.ndarray] = []
+    fore_diagnostics_parts: List[Dict[str, float]] = []
 
     for split_number in range(repeated_splits):
         split_seed = seed + 100_003 * split_number
@@ -2799,6 +3827,9 @@ def estimate_example_1b_stabilized(
             reward_rmse_stationary_parts.append(reward_metrics["reward_rmse_stationary"])
             reward_rmse_rho_weighted_parts.append(reward_metrics["reward_rmse_rho_weighted"])
             ratio_parts.append(np.asarray(fold_result["ratio"], dtype=float))
+            fold_fore = fold_result.get("fore_diagnostics", {})
+            if fold_fore:
+                fore_diagnostics_parts.append(dict(fold_fore))
         plugin_split_estimates.append(float(np.mean(contributions_plugin)))
         if_split_estimates.append(float(np.mean(contributions_if)))
         centered = contributions_if - np.mean(contributions_if)
@@ -2815,7 +3846,7 @@ def estimate_example_1b_stabilized(
     ratio_values = np.concatenate(ratio_parts) if ratio_parts else np.array([np.nan])
     ratio_quantiles = weighted_quantiles(ratio_values, [0.01, 0.50, 0.99])
     bellman_concat = np.concatenate(bellman_values) if bellman_values else np.array([np.nan])
-    return SingleRunResult(
+    result = SingleRunResult(
         example_id="1b",
         n=n,
         seed=seed,
@@ -2851,6 +3882,7 @@ def estimate_example_1b_stabilized(
         nu_ratio_q50=float("nan"),
         nu_ratio_q99=float("nan"),
     )
+    return attach_fore_diagnostics(result, fore_diagnostics_parts)
 
 
 def estimate_example(
@@ -2892,7 +3924,7 @@ def estimate_example(
             if "bellman_eval" in fold_result
             else np.full(n, np.nan, dtype=float)
         )
-        return finalize_single_run_result(
+        result = finalize_single_run_result(
             oracle=oracle,
             example_id=example_id,
             n=n,
@@ -2916,7 +3948,10 @@ def estimate_example(
             nu_ratio_parts=(
                 [np.asarray(fold_result["nu_ratio"], dtype=float)] if "nu_ratio" in fold_result else []
             ),
+            fold_indices=[np.arange(n, dtype=int)],
         )
+        fold_fore = fold_result.get("fore_diagnostics", {})
+        return attach_fore_diagnostics(result, [dict(fold_fore)] if fold_fore else [])
 
     contributions_plugin = np.zeros(n, dtype=float)
     contributions_if = np.zeros(n, dtype=float)
@@ -2930,6 +3965,7 @@ def estimate_example(
     pi0_action0_parts: List[np.ndarray] = []
     pi_ratio_parts: List[np.ndarray] = []
     nu_ratio_parts: List[np.ndarray] = []
+    fore_diagnostics_parts: List[Dict[str, float]] = []
     fold_indices = fold_splits(n, seed, n_folds=oracle.config.crossfit_folds)
     all_idx = np.arange(n)
 
@@ -2968,7 +4004,10 @@ def estimate_example(
             pi_ratio_parts.append(np.asarray(fold_result["pi_ratio"], dtype=float))
         if "nu_ratio" in fold_result:
             nu_ratio_parts.append(np.asarray(fold_result["nu_ratio"], dtype=float))
-    return finalize_single_run_result(
+        fold_fore = fold_result.get("fore_diagnostics", {})
+        if fold_fore:
+            fore_diagnostics_parts.append(dict(fold_fore))
+    result = finalize_single_run_result(
         oracle=oracle,
         example_id=example_id,
         n=n,
@@ -2986,7 +4025,9 @@ def estimate_example(
         pi0_action0_parts=pi0_action0_parts,
         pi_ratio_parts=pi_ratio_parts,
         nu_ratio_parts=nu_ratio_parts,
+        fold_indices=fold_indices,
     )
+    return attach_fore_diagnostics(result, fore_diagnostics_parts)
 
 
 def estimate_example_2_repeated(
@@ -3114,7 +4155,7 @@ def run_single_replication(
     n: int,
     seed: int,
     example_id: str,
-    ratio_mode: str = "oracle",
+    ratio_mode: str = "neural-fore",
 ) -> SingleRunResult:
     data = oracle.sample_stationary_transitions(n=n, seed=seed)
     nuisance_data = None
@@ -3130,40 +4171,182 @@ def run_single_replication(
     )
 
 
+def _recordable_estimation_failure(exc: Exception) -> bool:
+    """Distinguish numerical fit failures from programming/configuration errors."""
+    if isinstance(exc, (FloatingPointError, OverflowError, np.linalg.LinAlgError)):
+        return True
+    message = str(exc).lower()
+    numerical_markers = (
+        "nonfinite",
+        "non-finite",
+        "nan",
+        "infinite",
+        "numerical",
+        "singular",
+    )
+    return isinstance(exc, (RuntimeError, ValueError)) and any(
+        marker in message for marker in numerical_markers
+    )
+
+
+def failed_single_run_result(
+    *,
+    oracle: JRSSBOracle,
+    n: int,
+    seed: int,
+    example_id: str,
+    ratio_mode: str,
+    exc: Exception,
+) -> SingleRunResult:
+    """Return a labeled failure row so a confirmatory cell can continue."""
+    truth = {
+        "1a": oracle.psi_1a,
+        "1b": oracle.psi_1b,
+        "2": oracle.psi_2,
+    }[example_id]
+    nan = float("nan")
+    return SingleRunResult(
+        example_id=example_id,
+        n=n,
+        seed=seed,
+        ratio_mode=ratio_mode,
+        nuisance_method=nuisance_method_name(oracle, example_id),
+        plugin_estimate=nan,
+        if_estimate=nan,
+        truth=float(truth),
+        estimated_se=nan,
+        ci_lower=nan,
+        ci_upper=nan,
+        covered=nan,
+        plugin_error=nan,
+        if_error=nan,
+        reward_rmse=nan,
+        reward_rmse_grid=nan,
+        reward_rmse_stationary=nan,
+        reward_rmse_rho_weighted=nan,
+        bellman_residual_rmse=nan,
+        q_nu_bellman_rmse=nan,
+        q_eval_bellman_rmse=nan,
+        ratio_q01=nan,
+        ratio_q50=nan,
+        ratio_q99=nan,
+        weight_ess=nan,
+        pi0_action0_q01=nan,
+        pi0_action0_q50=nan,
+        pi0_action0_q99=nan,
+        pi_ratio_q01=nan,
+        pi_ratio_q50=nan,
+        pi_ratio_q99=nan,
+        nu_ratio_q01=nan,
+        nu_ratio_q50=nan,
+        nu_ratio_q99=nan,
+        ratio_failure=1.0,
+        failure_message=f"{type(exc).__name__}: {exc}",
+    )
+
+
+def run_single_replication_safe(
+    oracle: JRSSBOracle,
+    n: int,
+    seed: int,
+    example_id: str,
+    ratio_mode: str,
+) -> SingleRunResult:
+    """Run one replication while recording only genuine numerical failures."""
+    try:
+        return run_single_replication(
+            oracle=oracle,
+            n=n,
+            seed=seed,
+            example_id=example_id,
+            ratio_mode=ratio_mode,
+        )
+    except Exception as exc:
+        if not _recordable_estimation_failure(exc):
+            raise
+        return failed_single_run_result(
+            oracle=oracle,
+            n=n,
+            seed=seed,
+            example_id=example_id,
+            ratio_mode=ratio_mode,
+            exc=exc,
+        )
+
+
 def run_monte_carlo(
     oracle: JRSSBOracle,
     sample_sizes: Optional[Sequence[int]] = None,
     repetitions: Optional[int] = None,
-    example_ids: Sequence[str] = ("1a", "1b", "2"),
-    ratio_mode: str = "oracle",
+    example_ids: Sequence[str] = ("1a", "1b"),
+    ratio_mode: str = "neural-fore",
     jobs: int = 1,
+    seed_offset: int = 0,
+    replication_indices: Optional[Sequence[int]] = None,
+    on_result: Optional[Callable[[SingleRunResult], None]] = None,
 ) -> List[SingleRunResult]:
+    """Run requested replications, optionally checkpointing each parent-side result."""
     sample_sizes = tuple(oracle.config.mc_sample_sizes if sample_sizes is None else sample_sizes)
     repetitions = oracle.config.mc_repetitions if repetitions is None else repetitions
+    if repetitions <= 0:
+        raise ValueError("repetitions must be positive.")
+    if jobs <= 0:
+        raise ValueError("jobs must be positive.")
+    if replication_indices is None:
+        requested_replications = tuple(range(repetitions))
+    else:
+        requested_replications = tuple(int(index) for index in replication_indices)
+        if len(set(requested_replications)) != len(requested_replications):
+            raise ValueError("replication_indices must be unique.")
+        if any(index < 0 or index >= repetitions for index in requested_replications):
+            raise ValueError("replication_indices must lie in [0, repetitions).")
     example_offsets = {"1a": 101, "1b": 202, "2": 303}
-    ratio_offsets = {"oracle": 0, "coarse-estimated": 50_000}
     tasks: List[tuple[int, int, str, str]] = []
     for example_id in example_ids:
         for n in sample_sizes:
-            for rep in range(repetitions):
-                seed = 10_000 * (rep + 1) + 97 * n + example_offsets[example_id] + ratio_offsets.get(ratio_mode, 0)
+            for rep in requested_replications:
+                # Keep the generated dataset fixed across ratio estimators.
+                # Estimator-specific seed offsets invalidate paired nuisance
+                # audits and can badly distort small Monte Carlo comparisons.
+                seed = (
+                    10_000 * (rep + 1)
+                    + 97 * n
+                    + example_offsets[example_id]
+                    + int(seed_offset)
+                )
                 tasks.append((n, seed, example_id, ratio_mode))
+
+    def collect(iterator: Iterable[SingleRunResult]) -> List[SingleRunResult]:
+        collected: List[SingleRunResult] = []
+        for result in iterator:
+            collected.append(result)
+            if on_result is not None:
+                on_result(result)
+        return collected
+
     if jobs <= 1:
-        return [
-            run_single_replication(oracle=oracle, n=n, seed=seed, example_id=example_id, ratio_mode=ratio_mode)
+        return collect(
+            run_single_replication_safe(oracle=oracle, n=n, seed=seed, example_id=example_id, ratio_mode=ratio_mode)
             for n, seed, example_id, ratio_mode in tasks
-        ]
+        )
     try:
         with concurrent.futures.ProcessPoolExecutor(
             max_workers=jobs,
             initializer=_init_monte_carlo_worker,
             initargs=(oracle.config,),
         ) as executor:
-            return list(executor.map(_run_single_replication_worker, tasks))
+            return collect(executor.map(_run_single_replication_worker, tasks))
     except (OSError, PermissionError):
-        thread_tasks = [(oracle, n, seed, example_id, ratio_mode) for n, seed, example_id, ratio_mode in tasks]
-        with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as executor:
-            return list(executor.map(_run_single_replication_thread, thread_tasks))
+        return collect(
+            run_single_replication_safe(
+                oracle=oracle,
+                n=n,
+                seed=seed,
+                example_id=example_id,
+                ratio_mode=ratio_mode,
+            )
+            for n, seed, example_id, ratio_mode in tasks
+        )
 
 
 def summarize_results(results: Sequence[SingleRunResult]) -> List[Dict[str, float | str | int]]:
@@ -3173,11 +4356,26 @@ def summarize_results(results: Sequence[SingleRunResult]) -> List[Dict[str, floa
         grouped.setdefault(key, []).append(result)
 
     summary: List[Dict[str, float | str | int]] = []
-    for (example_id, n, ratio_mode, nuisance_method), rows in sorted(grouped.items()):
-        reps = len(rows)
+    for (example_id, n, ratio_mode, nuisance_method), all_rows in sorted(grouped.items()):
+        reps = len(all_rows)
+        rows = [
+            row
+            for row in all_rows
+            if row.ratio_failure == 0.0
+            and np.isfinite(row.plugin_estimate)
+            and np.isfinite(row.if_estimate)
+        ]
+        successful_reps = len(rows)
         plugin_errors = np.array([row.plugin_error for row in rows], dtype=float)
         if_errors = np.array([row.if_error for row in rows], dtype=float)
         estimated_ses = np.array([row.estimated_se for row in rows], dtype=float)
+        iid_ses = np.array([row.iid_estimated_se for row in rows], dtype=float)
+        fold_cluster_ses = np.array(
+            [row.fold_cluster_estimated_se for row in rows], dtype=float
+        )
+        critical_values = np.array(
+            [row.ci_critical_value for row in rows], dtype=float
+        )
         coverages = np.array([row.covered for row in rows], dtype=float)
         reward_rmses = np.array([row.reward_rmse for row in rows], dtype=float)
         reward_rmses_grid = np.array([row.reward_rmse_grid for row in rows], dtype=float)
@@ -3194,8 +4392,44 @@ def summarize_results(results: Sequence[SingleRunResult]) -> List[Dict[str, floa
         pi0_q99 = np.array([row.pi0_action0_q99 for row in rows], dtype=float)
         pi_ratio_q99 = np.array([row.pi_ratio_q99 for row in rows], dtype=float)
         nu_ratio_q99 = np.array([row.nu_ratio_q99 for row in rows], dtype=float)
-        plugin_sd = float(np.std(plugin_estimates, ddof=1)) if reps > 1 else float("nan")
-        if_sd = float(np.std(if_estimates, ddof=1)) if reps > 1 else float("nan")
+        fore_iterations = np.array([row.fore_selected_iterations for row in rows], dtype=float)
+        fore_scores = np.array([row.fore_apbv_score for row in rows], dtype=float)
+        fore_seconds = np.array([row.fore_fit_seconds for row in rows], dtype=float)
+        fore_training_rows = np.array([row.fore_training_rows for row in rows], dtype=float)
+        fore_mass = np.array([row.fore_normalized_mass for row in rows], dtype=float)
+        fore_cap = np.array([row.fore_logit_cap_fraction for row in rows], dtype=float)
+        signed_positive_iterations = np.array([row.signed_positive_iterations for row in rows], dtype=float)
+        signed_negative_iterations = np.array([row.signed_negative_iterations for row in rows], dtype=float)
+        signed_positive_scores = np.array([row.signed_positive_apbv_score for row in rows], dtype=float)
+        signed_negative_scores = np.array([row.signed_negative_apbv_score for row in rows], dtype=float)
+        signed_positive_seconds = np.array([row.signed_positive_fit_seconds for row in rows], dtype=float)
+        signed_negative_seconds = np.array([row.signed_negative_fit_seconds for row in rows], dtype=float)
+        signed_positive_normalized_mass = np.array(
+            [row.signed_positive_normalized_mass for row in rows], dtype=float
+        )
+        signed_negative_normalized_mass = np.array(
+            [row.signed_negative_normalized_mass for row in rows], dtype=float
+        )
+        signed_positive_ess = np.array(
+            [row.signed_positive_ess for row in rows], dtype=float
+        )
+        signed_negative_ess = np.array(
+            [row.signed_negative_ess for row in rows], dtype=float
+        )
+        signed_positive_q99 = np.array(
+            [row.signed_positive_ratio_q99 for row in rows], dtype=float
+        )
+        signed_negative_q99 = np.array(
+            [row.signed_negative_ratio_q99 for row in rows], dtype=float
+        )
+        signed_positive_cap = np.array(
+            [row.signed_positive_logit_cap_fraction for row in rows], dtype=float
+        )
+        signed_negative_cap = np.array(
+            [row.signed_negative_logit_cap_fraction for row in rows], dtype=float
+        )
+        plugin_sd = float(np.std(plugin_estimates, ddof=1)) if successful_reps > 1 else float("nan")
+        if_sd = float(np.std(if_estimates, ddof=1)) if successful_reps > 1 else float("nan")
         summary.append(
             {
                 "example_id": example_id,
@@ -3203,21 +4437,25 @@ def summarize_results(results: Sequence[SingleRunResult]) -> List[Dict[str, floa
                 "ratio_mode": ratio_mode,
                 "nuisance_method": nuisance_method,
                 "repetitions": reps,
-                "truth": rows[0].truth,
-                "plugin_bias": float(np.mean(plugin_errors)),
+                "successful_repetitions": successful_reps,
+                "truth": all_rows[0].truth,
+                "plugin_bias": safe_nanmean(plugin_errors),
                 "plugin_sd": plugin_sd,
-                "plugin_rmse": float(np.sqrt(np.mean(plugin_errors**2))),
-                "if_bias": float(np.mean(if_errors)),
+                "plugin_rmse": float(np.sqrt(safe_nanmean(plugin_errors**2))),
+                "if_bias": safe_nanmean(if_errors),
                 "if_sd": if_sd,
-                "if_rmse": float(np.sqrt(np.mean(if_errors**2))),
-                "avg_estimated_se": float(np.mean(estimated_ses)),
-                "coverage_95": float(np.mean(coverages)),
-                "avg_ci_length": float(np.mean(ci_lengths)),
-                "avg_reward_rmse": float(np.mean(reward_rmses)),
-                "avg_reward_rmse_grid": float(np.mean(reward_rmses_grid)),
-                "avg_reward_rmse_stationary": float(np.mean(reward_rmses_stationary)),
-                "avg_reward_rmse_rho_weighted": float(np.mean(reward_rmses_rho_weighted)),
-                "avg_bellman_rmse": float(np.mean(bellman_rmses)),
+                "if_rmse": float(np.sqrt(safe_nanmean(if_errors**2))),
+                "avg_estimated_se": safe_nanmean(estimated_ses),
+                "avg_iid_estimated_se": safe_nanmean(iid_ses),
+                "avg_fold_cluster_estimated_se": safe_nanmean(fold_cluster_ses),
+                "avg_ci_critical_value": safe_nanmean(critical_values),
+                "coverage_95": safe_nanmean(coverages),
+                "avg_ci_length": safe_nanmean(ci_lengths),
+                "avg_reward_rmse": safe_nanmean(reward_rmses),
+                "avg_reward_rmse_grid": safe_nanmean(reward_rmses_grid),
+                "avg_reward_rmse_stationary": safe_nanmean(reward_rmses_stationary),
+                "avg_reward_rmse_rho_weighted": safe_nanmean(reward_rmses_rho_weighted),
+                "avg_bellman_rmse": safe_nanmean(bellman_rmses),
                 "avg_q_nu_bellman_rmse": safe_nanmean(bellman_nu_rmses),
                 "avg_q_eval_bellman_rmse": safe_nanmean(bellman_eval_rmses),
                 "avg_pi0_action0_q01": safe_nanmean(pi0_q01),
@@ -3225,6 +4463,37 @@ def summarize_results(results: Sequence[SingleRunResult]) -> List[Dict[str, floa
                 "avg_pi0_action0_q99": safe_nanmean(pi0_q99),
                 "avg_pi_ratio_q99": safe_nanmean(pi_ratio_q99),
                 "avg_nu_ratio_q99": safe_nanmean(nu_ratio_q99),
+                "avg_fore_selected_iterations": safe_nanmean(fore_iterations),
+                "avg_fore_apbv_score": safe_nanmean(fore_scores),
+                "avg_fore_fit_seconds": safe_nanmean(fore_seconds),
+                "avg_fore_training_rows": safe_nanmean(fore_training_rows),
+                "avg_fore_normalized_mass": safe_nanmean(fore_mass),
+                "avg_fore_logit_cap_fraction": safe_nanmean(fore_cap),
+                "avg_signed_positive_iterations": safe_nanmean(signed_positive_iterations),
+                "avg_signed_negative_iterations": safe_nanmean(signed_negative_iterations),
+                "avg_signed_positive_apbv_score": safe_nanmean(signed_positive_scores),
+                "avg_signed_negative_apbv_score": safe_nanmean(signed_negative_scores),
+                "avg_signed_positive_fit_seconds": safe_nanmean(signed_positive_seconds),
+                "avg_signed_negative_fit_seconds": safe_nanmean(signed_negative_seconds),
+                "avg_signed_positive_normalized_mass": safe_nanmean(
+                    signed_positive_normalized_mass
+                ),
+                "avg_signed_negative_normalized_mass": safe_nanmean(
+                    signed_negative_normalized_mass
+                ),
+                "avg_signed_positive_ess": safe_nanmean(signed_positive_ess),
+                "avg_signed_negative_ess": safe_nanmean(signed_negative_ess),
+                "avg_signed_positive_ratio_q99": safe_nanmean(signed_positive_q99),
+                "avg_signed_negative_ratio_q99": safe_nanmean(signed_negative_q99),
+                "avg_signed_positive_logit_cap_fraction": safe_nanmean(
+                    signed_positive_cap
+                ),
+                "avg_signed_negative_logit_cap_fraction": safe_nanmean(
+                    signed_negative_cap
+                ),
+                "ratio_failure_rate": float(
+                    np.mean([row.ratio_failure for row in all_rows])
+                ),
             }
         )
     return summary
@@ -3537,37 +4806,63 @@ def run_example1b_large_sample_decomposition(
                 pi_star_true_eval = oracle.policy_probs(states_eval, oracle.pi_star)
                 pi_ratio_true = pi_star_true_eval[idx, actions_eval] / np.clip(probs_eval[idx, actions_eval], EPS, None)
                 plugin_est = float(np.mean(v_hat))
+                d_eval = rho_eval * pi_ratio
+                d_true_target_eval = rho_eval * pi_ratio_true
+                tilde_d_hat = (
+                    tilde_rho_eval * pi_ratio
+                    + d_eval * (q_sa_hat - v_hat)
+                )
+                tilde_d_oracle_q = (
+                    tilde_rho_eval * pi_ratio
+                    + d_eval * (q_sa_oracle - v_oracle)
+                )
+                tilde_d_oracle_true_target = (
+                    tilde_rho_eval * pi_ratio_true
+                    + d_true_target_eval * (q_sa_oracle - v_oracle)
+                )
                 if_est = float(
                     np.mean(
-                        v_hat
-                        + rho_eval * pi_ratio * (r_obs + oracle.config.gamma_behavior * v_next_hat - q_sa_hat)
-                        + (oracle.config.gamma_behavior / oracle.config.tau_star)
-                        * tilde_rho_eval
-                        * pi_ratio
-                        * (soft_next - continuation_eval[idx, actions_eval])
-                        + ((tilde_rho_eval / oracle.config.tau_star) + rho_eval) * (pi_ratio - 1.0)
+                        signed_ratio_if_contribution(
+                            v_hat,
+                            d_eval,
+                            rho_eval,
+                            tilde_d_hat,
+                            tilde_rho_eval,
+                            r_obs + oracle.config.gamma_behavior * v_next_hat - q_sa_hat,
+                            soft_next - continuation_eval[idx, actions_eval],
+                            gamma=oracle.config.gamma_behavior,
+                            temperature=oracle.config.tau_star,
+                        )
                     )
                 )
                 if_oracle_q_est = float(
                     np.mean(
-                        v_oracle
-                        + rho_eval * pi_ratio * (r_obs + oracle.config.gamma_behavior * v_next_oracle - q_sa_oracle)
-                        + (oracle.config.gamma_behavior / oracle.config.tau_star)
-                        * tilde_rho_eval
-                        * pi_ratio
-                        * (soft_next - continuation_oracle[idx, actions_eval])
-                        + ((tilde_rho_eval / oracle.config.tau_star) + rho_eval) * (pi_ratio - 1.0)
+                        signed_ratio_if_contribution(
+                            v_oracle,
+                            d_eval,
+                            rho_eval,
+                            tilde_d_oracle_q,
+                            tilde_rho_eval,
+                            r_obs + oracle.config.gamma_behavior * v_next_oracle - q_sa_oracle,
+                            soft_next - continuation_oracle[idx, actions_eval],
+                            gamma=oracle.config.gamma_behavior,
+                            temperature=oracle.config.tau_star,
+                        )
                     )
                 )
                 if_oracle_q_true_pi_star_est = float(
                     np.mean(
-                        v_oracle
-                        + rho_eval * pi_ratio_true * (r_obs + oracle.config.gamma_behavior * v_next_oracle - q_sa_oracle)
-                        + (oracle.config.gamma_behavior / oracle.config.tau_star)
-                        * tilde_rho_eval
-                        * pi_ratio_true
-                        * (soft_next_oracle - continuation_oracle[idx, actions_eval])
-                        + ((tilde_rho_eval / oracle.config.tau_star) + rho_eval) * (pi_ratio_true - 1.0)
+                        signed_ratio_if_contribution(
+                            v_oracle,
+                            d_true_target_eval,
+                            rho_eval,
+                            tilde_d_oracle_true_target,
+                            tilde_rho_eval,
+                            r_obs + oracle.config.gamma_behavior * v_next_oracle - q_sa_oracle,
+                            soft_next_oracle - continuation_oracle[idx, actions_eval],
+                            gamma=oracle.config.gamma_behavior,
+                            temperature=oracle.config.tau_star,
+                        )
                     )
                 )
                 rows.append(

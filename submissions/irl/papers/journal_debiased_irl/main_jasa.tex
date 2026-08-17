@@ -878,6 +878,10 @@ and set \(T_{\mathcal K} := T_{\mathcal K}(k_0)\), equipped with the inner produ
 \(\langle \beta_1,\beta_2\rangle_{\mathcal{K},0}
 := E_0[\beta_1(S',A,S)\beta_2(S',A,S)]\).  
 Intuitively, \(T_{\mathcal{K}}\) consists of allowable infinitesimal kernel scores that preserve the normalization of conditional densities under \(k(\cdot \mid a,s)\mu(ds')\).
+For the rate statements below, we also write
+\(\|h\|_{\mathcal H,r_0}:=\{E_0[h(A,S)^2]\}^{1/2}\); this is the
+same norm as \(\|h\|_{\mathcal H,0}\), with the subscript emphasizing that
+the action law is \(\pi_0=\exp(r_0)\).
 
 
 
@@ -1348,26 +1352,36 @@ denotes the policy value, \(v^\star\) the continuation value, and
 \exp\!\Bigl(\tau^{\star-1}\{r_0(\tilde a,s)
 + \gamma\,v_{r_0,k_0}^\star(\tilde a,s)\}\Bigr)\Biggr).
 \]
-We also define the conditional discounted state-occupancy ratio
+Let \(\rho_{r_0,k_0}^\star\) and \(d_{r_0,k_0}^\star\) denote the
+unnormalized discounted occupancy ratios in \eqref{eqn::occupancy}, with
+\(\pi=\pi_{r_0,k_0}^\star\). Define
 \[
-\rho_{r_0,k_0}^\star(s'\mid a,s)
-:= \frac{1}{\rho_0(s')}\sum_{t=0}^\infty \gamma^t\,
-\frac{\mathbb{P}_{k_0,\pi_{r_0,k_0}^\star}(S_t\in ds' \mid A_0=a,S_0=s)}{\mu(ds')},
+z_{r_0,k_0}^\star(a,s)
+:=d_{r_0,k_0}^\star(a,s)
+\{q_{r_0,k_0}^\star(a,s)-V_{r_0,k_0}^\star(s)\}.
 \]
-with marginal \(\rho_{r_0,k_0}^\star(s):=E_0[\rho_{r_0,k_0}^\star(s\mid A,S)]\)
-and state-action ratio
-\(d_{r_0,k_0}^\star(a,s):=\pi_{r_0,k_0}^\star(a\mid s)\pi_0(a\mid s)^{-1}
-\rho_{r_0,k_0}^\star(s)\).
-We also define the advantage-weighted state occupancy ratio
-\begin{equation} \label{eqn::tilderho}
-\widetilde{\rho}_{r_0,k_0}^\star(s)
-:= E_0\!\big[d_{r_0,k_0}^\star(A,S)\{q_{r_0,k_0}^\star(A,S)
-   - V_{r_0,k_0}^\star(S)\}\,\rho_{r_0,k_0}^\star(s\mid A,S)\big],
+The total advantage-weighted state--action representer is
+\begin{equation}
+\label{eqn::tilderho}
+\widetilde d_{r_0,k_0}^\star
+:=\big\{(\mathcal T_{r_0,k_0}^\star)^{-1}\big\}^{*}
+z_{r_0,k_0}^\star,
+\qquad
+\widetilde\rho_{r_0,k_0}^\star(s)
+:=\sum_{a\in\mathcal A}\pi_0(a\mid s)
+\widetilde d_{r_0,k_0}^\star(a,s),
 \end{equation}
-with state--action version
-$\widetilde{d}_{r_0,k_0}^\star(a,s)
-:= \tfrac{\pi_{r_0,k_0}^\star(a\mid s)}{\pi_0(a\mid s)}\,
-   \widetilde{\rho}_{r_0,k_0}^\star(s)$.
+where the adjoint is taken in
+\(L^2\{\rho_0(s)\pi_0(a\mid s)\}\). Equivalently, for every
+\(h\) in this space,
+\[
+E_0\{\widetilde d_{r_0,k_0}^\star(A,S)h(A,S)\}
+=E_0\!\left[z_{r_0,k_0}^\star(A,S)
+\{(\mathcal T_{r_0,k_0}^\star)^{-1}h\}(A,S)\right].
+\]
+This definition includes the current contribution
+\(z_{r_0,k_0}^\star\); the successor-state occupancy construction used for
+estimation represents only its strictly future component.
 In the following condition, let
 $p_{k_0, r_0}^{\star} := p_{k_0}^{\pi_{r_0, k_0}^\star, \gamma}$ denote the
 stationary $\mu$-density under $\pi_{r_0, k_0}^\star$.
@@ -1392,9 +1406,10 @@ $\|k-k_0\|_{\mathcal K}$.
 Let $m(a,s,r,k) := V_{r,k}^\star(s)$. Under \ref{cond::stationary3} and \ref{cond::lipschitzvalue}, the parameter $\Psi: P \mapsto E_P[V_{r_P,k_P}^\star(S)]$ is pathwise differentiable at $P_0$ with efficient influence function
 \begin{align*}
    \chi_0(s,a,s')
-&= \left\{\frac{1}{\tau^\star}\,\widetilde{\rho}_{r_0,k_0}^\star(s)
-    + \rho_{r_0,k_0}^{\star}(s)\right\}
-   \left\{\frac{\pi_{r_0,k_0}^\star(a\mid s)}{\pi_0(a\mid s)} - 1\right\} \\[4pt]
+&= d_{r_0,k_0}^\star(a,s)
+   +\frac{1}{\tau^\star}\widetilde d_{r_0,k_0}^\star(a,s)
+   -\rho_{r_0,k_0}^\star(s)
+   -\frac{1}{\tau^\star}\widetilde\rho_{r_0,k_0}^\star(s) \\[4pt]
 & \quad + \frac{\gamma}{\tau^\star}\,\widetilde{d}_{r_0,k_0}^\star(a,s)
    \left\{\Phi_{r_0,k_0}^\star(s')-v_{r_0,k_0}^\star(a,s)\right\} \\[4pt]
 & \quad + d_{r_0,k_0}^\star(a,s)\,\Big\{\,r_0(a,s) + \gamma\,V_{r_0,k_0}^{\star}(s') - q_{r_0,k_0}^\star(a,s)\,\Big\} \\[4pt]
@@ -1409,12 +1424,12 @@ Let $m(a,s,r,k) := V_{r,k}^\star(s)$. Under \ref{cond::stationary3} and \ref{con
 \end{theorem}
 \endgroup
 \noindent Relative to Theorem~\ref{theorem::EIFvalue}, this EIF adds the
-advantage-weighted ratio $\widetilde{\rho}_{r_0,k_0}^\star$ and the Bellman
-term
+total advantage-weighted representer and the Bellman term
 \(\tfrac{\gamma}{\tau^\star}\,\widetilde{d}_{r_0,k_0}^\star(a,s)
 \{\Phi_{r_0,k_0}^\star(s') - v_{r_0,k_0}^\star(a,s)\}\).
-Both terms arise because the target policy depends on the soft Bellman
-solution \(v_{r_0,k_0}^\star\). 
+It also centers \(\widetilde d_{r_0,k_0}^\star\) under the behaviour policy.
+Both additions arise because the target policy depends on the soft Bellman
+solution \(v_{r_0,k_0}^\star\).
 
 
 We now turn to Example~\ref{example::norm}. Write
@@ -1517,7 +1532,7 @@ occupancy ratio \(\rho_0^{\pi,\gamma}\). Our DML estimator of
   + \frac{1}{n}\sum_{i=1}^n
   \rho_n^{\pi,\gamma}(S_i)
   \left\{
-  1-\frac{\pi(A_i\mid S_i)}{\pi_n(A_i\mid S_i)}
+  \frac{\pi(A_i\mid S_i)}{\pi_n(A_i\mid S_i)}-1
   \right\}.
 \end{align*}
 The nuisance \(q_{r_0,k_0}^{\pi,\gamma}\) can be estimated by fitted
@@ -1581,23 +1596,29 @@ For Example~\ref{example::1b}, let \(r_n\) estimate \(r_0\), let
 :=
 \sum_{\tilde a\in\mathcal A^\star}
 \pi_n^\star(\tilde a\mid s)q_n^\star(\tilde a,s),$
-and let \(\widetilde\rho_n^\star\) and \(\rho_n^\star\) estimate
-\(\widetilde\rho_{r_0,k_0}^\star\) and \(\rho_{r_0,k_0}^\star\). The resulting
-estimator of \(\psi_0=E_0\{V_{r_0,k_0}^\star(S)\}\) is
+and let \(d_n^\star\) and \(\widetilde d_n^\star\) estimate the ordinary and
+total advantage-weighted state--action representers. Define their state
+averages under the fitted behaviour policy by
+\[
+\rho_n^\star(s):=\sum_{a\in\mathcal A}\pi_n(a\mid s)d_n^\star(a,s),
+\qquad
+\widetilde\rho_n^\star(s)
+:=\sum_{a\in\mathcal A}\pi_n(a\mid s)\widetilde d_n^\star(a,s).
+\]
+The resulting estimator of
+\(\psi_0=E_0\{V_{r_0,k_0}^\star(S)\}\) is
 \begin{align*}
 \psi_n
 &:=
 \frac{1}{n}\sum_{i=1}^n V_n^\star(S_i)
 +
 \frac{1}{n}\sum_{i=1}^n
-\rho_n^\star(S_i)
-\frac{\pi_n^\star(A_i\mid S_i)}{\pi_n(A_i\mid S_i)}
+d_n^\star(A_i,S_i)
 \{r_n(A_i,S_i)+\gamma V_n^\star(S_i')-q_n^\star(A_i,S_i)\}
 \\
 &\quad+
 \frac{\gamma}{n\tau^\star}\sum_{i=1}^n
-\widetilde\rho_n^\star(S_i)
-\frac{\pi_n^\star(A_i\mid S_i)}{\pi_n(A_i\mid S_i)}
+\widetilde d_n^\star(A_i,S_i)
 \left[
 \tau^\star
 \log\!\left\{
@@ -1613,20 +1634,19 @@ v_n^\star(A_i,S_i)
 &\quad+
 \frac{1}{n}\sum_{i=1}^n
 \left\{
-\tfrac{1}{\tau^\star}\widetilde\rho_n^\star(S_i)
-+
-\rho_n^\star(S_i)
-\right\}
-\left\{
-\frac{\pi_n^\star(A_i\mid S_i)}{\pi_n(A_i\mid S_i)}-1
+ d_n^\star(A_i,S_i)
+ +\tfrac{1}{\tau^\star}\widetilde d_n^\star(A_i,S_i)
+ -\rho_n^\star(S_i)
+ -\tfrac{1}{\tau^\star}\widetilde\rho_n^\star(S_i)
 \right\}.
 \end{align*}
 The fixed point \(v_n^\star\) can be estimated by soft \(Q\)-iteration
 \citep{haarnoja2017reinforcement,van2025stationary}, and \(q_n^\star\) by fitted
-\(Q\)-evaluation under \(\pi_n^\star\). The ratio
-\(\widetilde\rho_{r_0,k_0}^\star\) can be estimated by first estimating
-\(\rho_{r_0,k_0}^\star(s'\mid a,s)\) and then applying
-\eqref{eqn::tilderho}.  
+\(Q\)-evaluation under \(\pi_n^\star\). For the signed representer, let
+\(z_n=d_n^\star(q_n^\star-V_n^\star)\). A Jordan decomposition of
+\(z_n\) permits separate positive FORE fits initialized at successor states.
+Those fits estimate the strictly future term, which must be added to \(z_n\)
+to obtain the total \(\widetilde d_n^\star\) in the estimator above.
 \begin{enumerate}[label=\textbf{(E\arabic**)}, ref=E\arabic**, series=efficiency1b]
 \item \label{assump:rates::softstar}(\textit{Nuisance rates})  
 The following rates hold:
@@ -1634,14 +1654,16 @@ The following rates hold:
     \item \(\|v_n^\star - v_{r_0,k_0}^\star\|_{\mathcal{H},r_0}
     = o_p(n^{-1/4})\).
     
-    \item \(\|\widetilde{\rho}_n^\star - \widetilde{\rho}_{r_0,k_0}^\star\|_{\mathcal{H},r_0}\,
+    \item \(\|\widetilde d_n^\star - \widetilde d_{r_0,k_0}^\star\|_{\mathcal{H},r_0}\,
     \bigl(\|r_n - r_0\|_{\mathcal{H},r_0} + \|v_n^\star - v_{r_0,k_0}^\star\|_{\mathcal{H},r_0}\bigr)
     = o_p(n^{-1/2})\).
     
-    \item \(\bigl(\|\rho_n^\star - \rho_{r_0,k_0}^\star\|_{\mathcal{H},r_0}
+    \item \(\bigl(\|d_n^\star - d_{r_0,k_0}^\star\|_{\mathcal{H},r_0}
       + \|r_n - r_0\|_{\mathcal{H},r_0}
       + \|v_n^\star - v_{r_0,k_0}^\star\|_{\mathcal{H},r_0}\bigr)\,
-      \bigl\|\mathcal{T}_{r_0,k_0}^\star(q_n^\star - q_{r_0,k_0}^\star)\bigr\|_{\mathcal{H},r_0}
+      \bigl\{\bigl\|\mathcal{T}_{r_0,k_0}^\star(q_n^\star - q_{r_0,k_0}^\star)\bigr\|_{\mathcal{H},r_0}
+      +\|r_n-r_0\|_{\mathcal H,r_0}
+      +\|v_n^\star-v_{r_0,k_0}^\star\|_{\mathcal H,r_0}\bigr\}
       = o_p(n^{-1/2})\).
 \end{enumerate}
 \end{enumerate}
@@ -1750,65 +1772,98 @@ Then Theorem~\ref{thm:asymptotic_linearity} holds with influence function
 \section{Simulation study}
 \label{sec:simulation}
 
-We evaluated the proposed estimators in a continuous-state treatment MDP with
+We study the estimators in a continuous-state treatment MDP with
 two state variables, four actions, nonlinear rewards, and Gaussian state
-transitions. The behaviour policy is the soft-optimal policy induced by the
-data-generating reward and transition kernel, and all samples consist of
-stationary one-step transitions. Throughout the simulation study, we treat the
-transition kernel and discounted occupancy ratios as known, so that Bellman
-equations and related population quantities can be computed exactly. The aim is
-therefore not to study numerical error in solving Bellman equations, but to
-isolate the statistical problem of reward estimation and the propagation of
-reward-estimation error through policy and value-function operators. This
-design allows us to study the three policy-value targets from
-Section~\ref{sec::applications} within a common environment while retaining a
-continuous state space and sufficient structure to compute oracle values on a
-fine grid. All reported Monte Carlo summaries are based on $500$ replications
-per design point.
+transitions. Samples consist of independent stationary one-step transitions.
+The primary logging policy is a smooth state-dependent quadratic multinomial
+logit with controlled overlap; its probabilities are estimated rather than
+supplied to the estimator. We use five-fold cross-fitting and 300 predeclared
+Monte Carlo replications per design point. Example~\ref{example::1a} uses
+$n\in\{2500,5000,10000\}$, whereas the policy-adaptive
+Example~\ref{example::1b} uses $n\in\{25000,50000,100000\}$. A labeled
+appendix stress test restores the original soft-optimal logging policy and its
+heavier ratio tails. In the first study, a fine grid supplies simulation truth
+and a common high-accuracy Bellman-evaluation nuisance, thereby isolating
+estimated policy and ratio error. Grid truth is never available to FORE or
+A-PBV. The data-fusion study instead estimates a smooth Gaussian transition
+model from the observed transition source and solves fitted-grid Bellman equations.
 
-Examples~\ref{example::1a} and~\ref{example::1b} illustrate complementary
-finite-sample behaviour. Example~\ref{example::1a} is the most favourable
-setting, and debiased IRL (D-IRL) exhibits near-nominal coverage together with a clear RMSE
-improvement over the plug-in estimator at moderate and large sample sizes.
-Example~\ref{example::1b} is more demanding because the target policy is
-estimated from the recovered reward, so nuisance error propagates through the
-soft Bellman map into both the target and the EIF correction. Even in that
-setting, D-IRL reduces bias and RMSE at every sample size, although coverage
-remains below nominal.
-Table~\ref{tab:simulation-main} summarizes the results for these two examples.
+\paragraph{Estimated-ratio inference.}
+For Examples~\ref{example::1a} and~\ref{example::1b}, discounted occupancy
+ratios are learned from the same transition sample by neural fitted
+occupancy-ratio evaluation (FORE). The implementation uses two-hidden-layer
+networks, minibatches of 512 transitions, five stochastic-gradient updates per
+outer iteration, and gradient and log-ratio caps of 10. To keep the largest
+design practical, neural ratio optimization uses a deterministic maximum of
+20,000 outer-training rows per fold; logging-policy fitting and held-out
+inference continue to use all assigned rows.
+Hyperparameters are frozen in a separate pilot, and the number of fitted-ratio
+iterations in $\{30,100,300\}$ is selected within each training fold by held-out adversarial pairwise
+Bellman validation (A-PBV). This criterion compares pairwise log ratios through
+observable occupancy-balance moments and therefore uses neither the oracle
+ratio nor the target estimand. For Example~\ref{example::1b}, the
+advantage-weighted ratio is signed. We fit its positive and negative source
+measures separately by FORE and subtract the fitted components. The ordinary
+ratio and the two signed components are then refit on the full training fold
+before evaluating the untouched fold.
 
+Table~\ref{tab:fore-inference} compares the plug-in and D-IRL estimators by
+bias, Monte Carlo standard deviation, and RMSE across the 300 locked
+replications. For D-IRL we additionally report the mean estimated standard
+error, 95\% Wald coverage, and mean interval width. Oracle-ratio evaluations
+are retained only as labeled appendix diagnostics.
 
-\begin{table}[htb]
-\centering
-\caption{Examples~\ref{example::1a} and~\ref{example::1b}. Plug-in and D-IRL are
-summarized by Monte Carlo bias, Monte Carlo standard deviation, and RMSE.
-Coverage refers to the nominal $95\%$ Wald interval for D-IRL only.}
-\label{tab:simulation-main}
-\begingroup
-\scriptsize
-\setlength{\tabcolsep}{3pt}
-\begin{tabular}{llrrrrrrr}
-\toprule
-Example & $n$ & Plug-in bias & Plug-in SD & Plug-in RMSE & D-IRL bias & D-IRL SD & D-IRL RMSE & Coverage \\
-\midrule
-1a & 1000 & -0.661 & 0.235 & 0.702 & 0.851 & 1.025 & 1.331 & 0.980 \\
-1a & 2500 & -0.334 & 0.152 & 0.367 & 0.244 & 0.329 & 0.410 & 0.944 \\
-1a & 5000 & -0.194 & 0.107 & 0.221 & 0.091 & 0.149 & 0.175 & 0.942 \\
-1a & 10000 & -0.102 & 0.075 & 0.126 & 0.038 & 0.083 & 0.091 & 0.938 \\
-1b & 1000 & 1.333 & 0.344 & 1.376 & 0.721 & 0.299 & 0.781 & 0.644 \\
-1b & 2500 & 0.734 & 0.213 & 0.765 & 0.379 & 0.163 & 0.413 & 0.620 \\
-1b & 5000 & 0.390 & 0.144 & 0.415 & 0.191 & 0.111 & 0.221 & 0.724 \\
-1b & 10000 & 0.194 & 0.093 & 0.216 & 0.094 & 0.070 & 0.117 & 0.864 \\
-\bottomrule
-\end{tabular}
-\endgroup
-\end{table}
+\IfFileExists{../../experiments/journal_debiased_irl/artifacts/paper_confirmatory_v2_tables/main_inference_table.tex}{%
+\input{../../experiments/journal_debiased_irl/artifacts/paper_confirmatory_v2_tables/main_inference_table.tex}%
+}{}
 
- 
-We report simulation results for Example~\ref{example::norm} in
-Appendix~\ref{app::additionalapplications}. Inference is more challenging in
-this setting because of the additional nuisance components, but coverage is
-accurate when these components are well estimated.
+All 1,800 estimated-ratio replications completed without a nonfinite ratio fit
+or any log-ratio clipping. In Example~\ref{example::1a}, D-IRL coverage is
+93.3--96.3\%; in the more variable policy-adaptive
+Example~\ref{example::1b}, it is 92.7--95.3\%. Every cell's binomial 95\%
+interval contains the nominal 95\% level. Mean influence-function standard
+errors track Monte Carlo standard deviations to within 9\% in Example~1a and
+3\% in Example~1b. At $n=2500$ in Example~1a, debiasing reduces the plug-in
+bias from $-0.050$ to $0.007$, at the expected cost of additional correction
+variance. Across Example~1b, absolute D-IRL bias is at most $0.0054$.
+The fitted ratios have mean normalized mass 1.000--1.001, effective-sample
+fractions 0.65--0.93, and mean 99th percentiles 12.8--30.7, with no clipping
+or numerical failures.
+
+\paragraph{A practical data-fusion normalization.}
+The second study adapts Example~\ref{example::norm} to a transition log and an
+abundant outcome-summary source. The transition log contains $(S,A,S')$ and
+the known logging propensities, but no rewards. The auxiliary source contains
+only $(S,Y)$ over the state domain, with action deliberately unavailable and
+\[
+g(s)=E(Y\mid S=s)=\sum_a\nu(a\mid s)r_0(s,a),
+\]
+where $\nu$ is a known uniform randomized normalization policy. We generate one
+auxiliary sample of size $10^6$ with broad covariate coverage, fit a small smooth
+tanh network selected by held-out outcome loss, ensemble three source-only
+refits, and freeze the resulting $\widehat g$ across transition-sample
+replications. The target discount is $0.8$. Within each of five outer folds, a
+polynomial-sieve Gaussian transition model is tuned by held-out next-state loss,
+and neural FORE estimates the target occupancy ratio. We report point error and
+D-IRL interval coverage at $n\in\{2500,5000,10000\}$. The confidence intervals
+condition on the abundant frozen outcome source; joint uncertainty from
+estimating $g$ is intentionally negligible by design and is not claimed to be
+covered by the present EIF.
+
+\IfFileExists{../../experiments/journal_debiased_irl/artifacts/paper_confirmatory_v2_tables/data_fusion_table.tex}{%
+\input{../../experiments/journal_debiased_irl/artifacts/paper_confirmatory_v2_tables/data_fusion_table.tex}%
+}{}
+
+All 900 data-fusion replications completed successfully. D-IRL bias ranges
+from $-0.0008$ to $0.0029$, and coverage is 93.7--96.0\%; again, each cell's
+binomial 95\% interval contains 95\%. The mean standard error agrees closely
+with the Monte Carlo standard deviation at $n=2500$ and $5000$ and is 8\%
+smaller at $n=10000$, matching that cell's modest undercoverage. FORE retains
+unit normalized mass, an effective-sample fraction near 0.67, mean 99th
+percentiles between 13.2 and 13.6, and zero clipping or failures. The plug-in
+estimator has lower RMSE here because the deliberately abundant outcome source
+makes the frozen normalization regression exceptionally accurate; D-IRL adds
+the transition-sample correction needed for the reported confidence intervals.
 
 \section{Conclusion}
 

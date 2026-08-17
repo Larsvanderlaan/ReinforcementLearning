@@ -8,7 +8,10 @@ from typing import Dict, Sequence
 
 import numpy as np
 
-from utils import MLP, fit_gradient_boosted_regressor, one_hot, standardize_fit, state_action_features
+try:
+    from .utils import MLP, fit_gradient_boosted_regressor, one_hot, standardize_fit, state_action_features
+except ImportError:  # pragma: no cover - supports direct script execution
+    from utils import MLP, fit_gradient_boosted_regressor, one_hot, standardize_fit, state_action_features
 
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
@@ -21,7 +24,10 @@ except Exception:  # pragma: no cover - optional dependency
     nn = None
 
 try:
-    from lightgbm_fqe import fit_fqe_boosted as fit_fqe_boosted_lgbm
+    try:
+        from .lightgbm_fqe import fit_fqe_boosted as fit_fqe_boosted_lgbm
+    except ImportError:  # pragma: no cover - supports direct script execution
+        from lightgbm_fqe import fit_fqe_boosted as fit_fqe_boosted_lgbm
 except Exception:  # pragma: no cover - optional dependency
     fit_fqe_boosted_lgbm = None
 
@@ -122,6 +128,7 @@ def fit_fqe_neural(
     dones = np.asarray(dones, dtype=float).reshape(-1)
 
     if torch is not None:
+        torch.manual_seed(seed)
         mean, std = standardize_fit(states)
 
         def transform(x: np.ndarray) -> np.ndarray:

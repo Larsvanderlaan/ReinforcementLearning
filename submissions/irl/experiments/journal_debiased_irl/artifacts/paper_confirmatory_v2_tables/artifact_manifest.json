@@ -1,0 +1,29 @@
+{
+  "all_locked_cells_reported": true,
+  "coverage_calibration_is_diagnostic_only": true,
+  "expected_repetitions_per_cell": 300,
+  "input_runs": {
+    "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/paper_confirmatory_v2_data_fusion": {
+      "artifact_manifest_sha256": "4e8e4e00a984ebaacf2ce3132d51373472a9bce2a28374a234c3094938577cfa",
+      "cells": 900
+    },
+    "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/paper_confirmatory_v2_example1a": {
+      "artifact_manifest_sha256": "f655c96ebed4f54ba346a0cf101c22fb55ab4ca953069a2f360026f22030fc76",
+      "cells": 900
+    },
+    "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/paper_confirmatory_v2_example1b": {
+      "artifact_manifest_sha256": "2a42978ebf1a2dd6e0b5d6bcd5ddcc3efbcfddd117d765a123cf30717ff3708e",
+      "cells": 900
+    }
+  },
+  "outputs": {
+    "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/paper_confirmatory_v2_tables/coverage_calibration_audit.csv": "b12fe6f9871a64233d2c105c97d4bb6fe415f11438b6a271124c320f15dc4088",
+    "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/paper_confirmatory_v2_tables/data_fusion_summary.csv": "aee1317d9daddf9690e62044c9e944a4ab94137c5a74803c60e9d8e1da656a8e",
+    "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/paper_confirmatory_v2_tables/data_fusion_table.tex": "8a231e5d7650e350e9a1668a2029f4e2b0d493be0b5e4ae66c3e6ec479d161ed",
+    "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/paper_confirmatory_v2_tables/main_inference_table.tex": "e87f4e94f4ec8989d0ed9e4251c04b94c42879d9d33039db42c613a24fc20350",
+    "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/paper_confirmatory_v2_tables/main_summary.csv": "c5c26472611ef29486e2cda351cf4f3a824cd52a26fdede9683ea785c0daa056"
+  },
+  "paper_protocol_id": "jasa-neural-fore-v2-corrected",
+  "protocol_complete": true,
+  "truth_used_for_selection_or_suppression": false
+}

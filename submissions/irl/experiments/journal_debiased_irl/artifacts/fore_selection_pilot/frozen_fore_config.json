@@ -1,0 +1,96 @@
+{
+  "number_of_events": 160,
+  "selected": {
+    "hidden_dims": [
+      64,
+      64
+    ],
+    "learning_rate": 0.0003,
+    "mean_within_event_rank": 3.775,
+    "selection_count": 30,
+    "weight_decay": 0.001
+  },
+  "summary_rows": [
+    {
+      "hidden_dims": [
+        64,
+        64
+      ],
+      "learning_rate": 0.0003,
+      "mean_within_event_rank": 3.775,
+      "selection_count": 30,
+      "weight_decay": 0.001
+    },
+    {
+      "hidden_dims": [
+        64,
+        64
+      ],
+      "learning_rate": 0.0003,
+      "mean_within_event_rank": 6.86875,
+      "selection_count": 5,
+      "weight_decay": 0.01
+    },
+    {
+      "hidden_dims": [
+        64,
+        64
+      ],
+      "learning_rate": 0.001,
+      "mean_within_event_rank": 3.5625,
+      "selection_count": 28,
+      "weight_decay": 0.001
+    },
+    {
+      "hidden_dims": [
+        64,
+        64
+      ],
+      "learning_rate": 0.001,
+      "mean_within_event_rank": 4.13125,
+      "selection_count": 8,
+      "weight_decay": 0.01
+    },
+    {
+      "hidden_dims": [
+        128,
+        128
+      ],
+      "learning_rate": 0.0003,
+      "mean_within_event_rank": 4.2625,
+      "selection_count": 26,
+      "weight_decay": 0.001
+    },
+    {
+      "hidden_dims": [
+        128,
+        128
+      ],
+      "learning_rate": 0.0003,
+      "mean_within_event_rank": 5.1875,
+      "selection_count": 15,
+      "weight_decay": 0.01
+    },
+    {
+      "hidden_dims": [
+        128,
+        128
+      ],
+      "learning_rate": 0.001,
+      "mean_within_event_rank": 4.24375,
+      "selection_count": 28,
+      "weight_decay": 0.001
+    },
+    {
+      "hidden_dims": [
+        128,
+        128
+      ],
+      "learning_rate": 0.001,
+      "mean_within_event_rank": 3.96875,
+      "selection_count": 20,
+      "weight_decay": 0.01
+    }
+  ],
+  "uses_oracle_truth": false
+}
