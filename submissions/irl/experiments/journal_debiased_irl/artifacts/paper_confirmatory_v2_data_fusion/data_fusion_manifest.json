@@ -1,0 +1,107 @@
+{
+  "behavior_policy_selection": {
+    "candidate_c": [
+      0.01,
+      0.1,
+      1.0,
+      10.0
+    ],
+    "candidate_degrees": [
+      2,
+      3,
+      4
+    ],
+    "criterion": "held-out observed-action negative log likelihood",
+    "logging_probabilities_observed": true,
+    "method": "observed logging probabilities",
+    "mode": "known-logging",
+    "probability_floor": 0.02,
+    "uses_estimand_truth": false,
+    "uses_reward_truth": false,
+    "uses_transition_truth": false
+  },
+  "conditional_on_frozen_g": true,
+  "g_estimand_shift_oracle_diagnostic": 0.0030122077115029566,
+  "g_mode": "frozen",
+  "g_rmse_oracle_diagnostic": 0.002425315915397647,
+  "joint_g_uncertainty_covered": false,
+  "mode": "data-fusion-confirmatory",
+  "normalization_policy": {
+    "action_recorded_in_analysis_source": false,
+    "known_action_probabilities": [
+      0.25,
+      0.25,
+      0.25,
+      0.25
+    ],
+    "mode": "known-uniform"
+  },
+  "outcome_model_family": "outcome-summary-lbfgs-tanh-ensemble-v4",
+  "outcome_regression_seed": 91001,
+  "outcome_regression_selection": {
+    "candidate_scores": [
+      {
+        "alpha": 0.01,
+        "hidden_units": 4,
+        "one_se_eligible": 1,
+        "one_se_threshold": 0.04012336372562031,
+        "validation_mse": 0.03999697072706449
+      },
+      {
+        "alpha": 0.001,
+        "hidden_units": 4,
+        "one_se_eligible": 1,
+        "one_se_threshold": 0.04012336372562031,
+        "validation_mse": 0.04001151640975057
+      },
+      {
+        "alpha": 0.01,
+        "hidden_units": 8,
+        "one_se_eligible": 1,
+        "one_se_threshold": 0.04012336372562031,
+        "validation_mse": 0.04000088762061603
+      },
+      {
+        "alpha": 0.001,
+        "hidden_units": 8,
+        "one_se_eligible": 1,
+        "one_se_threshold": 0.04012336372562031,
+        "validation_mse": 0.04000074473860422
+      }
+    ],
+    "criterion": "one-SE held-out outcome mean-squared error",
+    "selected_config": {
+      "alpha": 0.01,
+      "ensemble_size": 3,
+      "hidden_units": 4,
+      "intercept_offset": 4.481768719912713e-05
+    },
+    "selected_validation_mse": 0.03999697072706449,
+    "uses_oracle_truth": false
+  },
+  "outcome_sample_size": 1000000,
+  "outcome_source_state_mode": "uniform-domain",
+  "pilot_median_se": 0.051025184356734074,
+  "ratio_mode": "neural-fore",
+  "readiness": {
+    "allowed_absolute_shift": 0.005109142519375904,
+    "observed_absolute_shift": 0.0030122077115029566,
+    "passed": true,
+    "pilot_median_se": 0.05109142519375903
+  },
+  "repeated_crossfit_splits": 1,
+  "transition_selection": {
+    "candidate_ridge_alpha": [
+      0.01,
+      0.1,
+      1.0,
+      10.0
+    ],
+    "criterion": "held-out next-state mean-squared error",
+    "method": "action-specific degree-3 Gaussian transition sieve",
+    "mode": "sieve",
+    "uses_estimand_truth": false,
+    "uses_reward_truth": false,
+    "uses_transition_truth": false
+  }
+}

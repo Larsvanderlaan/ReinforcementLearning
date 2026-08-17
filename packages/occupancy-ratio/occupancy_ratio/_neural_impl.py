@@ -346,6 +346,7 @@ class NeuralOccupancyRegressionConfig:
     gradient_steps_per_iteration: int = 4
     mcmc_samples: int = 24
     initial_ratio: float = 1.0
+    fixed_point_initialization: str = "one_step"
     loss: str = "huber"
     huber_delta: Optional[float] = None
     huber_delta_scale: float = 1.345
@@ -363,6 +364,8 @@ class NeuralOccupancyRegressionConfig:
     transition_cache_norm_eps: float = 1e-12
     occupancy_sample_weight_mode: str = "uniform"
     occupancy_sample_weight_max: Optional[float] = 20.0
+    occupancy_ess_penalty: float = 0.0
+    occupancy_ess_mean_penalty: float = 10.0
     fixed_point_tol: Optional[float] = None
     fixed_point_patience: int = 3
     min_outer_iterations: int = 3
@@ -409,6 +412,7 @@ class NeuralOccupancyRegressionConfig:
             raise ValueError("mcmc_samples must be positive.")
         if self.initial_ratio <= 0.0:
             raise ValueError("initial_ratio must be positive.")
+        _normalize_fixed_point_initialization(self.fixed_point_initialization)
         self._normalized_loss()
         if self.huber_delta is not None and self.huber_delta <= 0.0:
             raise ValueError("huber_delta must be positive when supplied.")
@@ -420,6 +424,10 @@ class NeuralOccupancyRegressionConfig:
             raise ValueError("huber_delta_min_quantile must be in (0, 1).")
         if self.validation_warmup_iterations < 0:
             raise ValueError("validation_warmup_iterations must be nonnegative.")
+        if self.occupancy_ess_penalty < 0.0:
+            raise ValueError("occupancy_ess_penalty must be nonnegative.")
+        if self.occupancy_ess_mean_penalty < 0.0:
+            raise ValueError("occupancy_ess_mean_penalty must be nonnegative.")
         if self.direct_adjoint_steps is not None and self.direct_adjoint_steps <= 0:
             raise ValueError("direct_adjoint_steps must be positive when supplied.")
         if self.direct_adjoint_learning_rate is not None and self.direct_adjoint_learning_rate <= 0.0:
@@ -540,7 +548,7 @@ class NeuralDiscountedOccupancyRatioModel:
     action_dim: int
     history: List[Dict[str, Any]]
     diagnostics: Dict[str, Any]
-    legacy_result: Dict[str, Any]
+    fit_payload: Dict[str, Any]
     occupancy_normalize: bool = False
     occupancy_ratio_max: Optional[float] = None
     occupancy_projection_eps: float = 1e-12
@@ -626,9 +634,6 @@ class NeuralDiscountedOccupancyRatioModel:
                 out["observed_action_ratio"],
             )
         return out
-
-    def to_legacy_dict(self) -> Dict[str, Any]:
-        return dict(self.legacy_result)
 
     def _state_action_features(self, states: Array, actions: Array) -> Array:
         states = _as_2d(states, "states")
@@ -946,7 +951,7 @@ def fit_discounted_occupancy_ratio_neural(
             else 1.0
         )
 
-    legacy = dict(
+    fit_payload = dict(
         bst_w=None,
         bst_iw=None,
         bst_k=None,
@@ -1004,12 +1009,15 @@ def fit_discounted_occupancy_ratio_neural(
         transition_prior_correction=float(transition_fit.get("prior_correction", 1.0)),
         **source_diagnostics,
         **c_diagnostics,
+        **occ_predictor["fixed_point_initialization_diag"],
         initial_ratio_mode=resolved_initial_mode,
         one_step_ratio_mode=resolved_one_step_mode,
         action_crossfit=action_fit.get("crossfit"),
         transition_crossfit=transition_fit.get("crossfit"),
         nuisance_crossfit=None if crossfit_context is None else crossfit_context.get("diagnostics", {}),
         fixed_point_damping=float(occupancy.fixed_point_damping),
+        occupancy_ess_penalty=float(occupancy.occupancy_ess_penalty),
+        occupancy_ess_mean_penalty=float(occupancy.occupancy_ess_mean_penalty),
         normalize_occupancy=bool(occupancy.normalize_occupancy),
         occupancy_ratio_max=occupancy.occupancy_ratio_max,
         occupancy_projection_eps=float(occupancy.occupancy_projection_eps),
@@ -1057,6 +1065,7 @@ def fit_discounted_occupancy_ratio_neural(
         transition_prior_correction=float(transition_fit.get("prior_correction", 1.0)),
         **source_diagnostics,
         **c_diagnostics,
+        **occ_predictor["fixed_point_initialization_diag"],
         initial_ratio_mode=resolved_initial_mode,
         one_step_ratio_mode=resolved_one_step_mode,
         action_crossfit_folds=float(action_fit.get("crossfit_folds", 1)),
@@ -1064,6 +1073,8 @@ def fit_discounted_occupancy_ratio_neural(
         nuisance_crossfit_enabled=bool(crossfit_context is not None),
         loss=occupancy._normalized_loss(),
         fixed_point_damping=float(occupancy.fixed_point_damping),
+        occupancy_ess_penalty=float(occupancy.occupancy_ess_penalty),
+        occupancy_ess_mean_penalty=float(occupancy.occupancy_ess_mean_penalty),
         normalize_occupancy=bool(occupancy.normalize_occupancy),
         normalize_transition_cache=bool(occupancy.normalize_transition_cache),
         occupancy_ratio_max=occupancy.occupancy_ratio_max,
@@ -1083,7 +1094,7 @@ def fit_discounted_occupancy_ratio_neural(
         action_dim=A.shape[1],
         history=history,
         diagnostics=diagnostics,
-        legacy_result=legacy,
+        fit_payload=fit_payload,
         occupancy_normalize=bool(occupancy.normalize_occupancy),
         occupancy_ratio_max=occupancy.occupancy_ratio_max,
         occupancy_projection_eps=float(occupancy.occupancy_projection_eps),
@@ -2049,6 +2060,64 @@ def _direct_one_step_ratio_neural_config(
     return replace(source_config, **kwargs)
 
 
+def _normalize_fixed_point_initialization(mode: str) -> str:
+    normalized = str(mode).strip().lower()
+    if normalized not in {"unit", "gamma_zero", "one_step"}:
+        raise ValueError("fixed_point_initialization must be 'unit', 'gamma_zero', or 'one_step'.")
+    return normalized
+
+
+def _make_neural_fixed_point_initial_state(
+    *,
+    fixed_point_initialization: str,
+    initial_ratio: float,
+    source_weight_query: Array,
+    target_builder: Any,
+    n_behavior_rows: int,
+    n_query_rows: int,
+    normalize_occupancy: bool,
+    occupancy_ratio_max: Optional[float],
+    occupancy_projection_eps: float,
+) -> tuple[Array, Array, Dict[str, Any]]:
+    mode = _normalize_fixed_point_initialization(fixed_point_initialization)
+    if mode == "unit":
+        query_raw = np.full(int(n_query_rows), float(initial_ratio), dtype=np.float64)
+    elif mode == "gamma_zero":
+        query_raw = np.asarray(source_weight_query, dtype=np.float64).reshape(-1)
+        if query_raw.shape[0] != int(n_query_rows):
+            raise ValueError("source_weight_query must match query rows.")
+    else:
+        out = target_builder(w_beh=np.ones(int(n_behavior_rows), dtype=np.float64))
+        query_raw = np.asarray(out["y"], dtype=np.float64).reshape(-1)
+        if query_raw.shape[0] != int(n_query_rows):
+            raise ValueError("one-step initial target must match query rows.")
+
+    beh_raw = query_raw[-int(n_behavior_rows) :]
+    query_state = _project_nonnegative_normalized(
+        query_raw,
+        max_value=occupancy_ratio_max,
+        normalize=normalize_occupancy,
+        eps=occupancy_projection_eps,
+    )
+    beh_state = _project_nonnegative_normalized(
+        beh_raw,
+        max_value=occupancy_ratio_max,
+        normalize=normalize_occupancy,
+        eps=occupancy_projection_eps,
+    )
+    return (
+        query_state,
+        beh_state,
+        {
+            "fixed_point_initialization": mode,
+            "fixed_point_initial_query_mean": float(np.mean(query_state)) if query_state.size else float("nan"),
+            "fixed_point_initial_query_max": float(np.max(query_state)) if query_state.size else float("nan"),
+            "fixed_point_initial_behavior_mean": float(np.mean(beh_state)) if beh_state.size else float("nan"),
+            "fixed_point_initial_behavior_max": float(np.max(beh_state)) if beh_state.size else float("nan"),
+        },
+    )
+
+
 def _source_state_ratio_diagnostics(source_query: Optional[Array], fit: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if source_query is None:
         return dict(
@@ -2188,8 +2257,10 @@ def _fit_occupancy_neural(
     )
 
     x_query_t = torch.as_tensor(_standardize(X_sa_query, mean, scale), dtype=torch.float32, device=device)
+    x_beh_t = torch.as_tensor(_standardize(X_sa_beh, mean, scale), dtype=torch.float32, device=device)
     train_idx_t = torch.as_tensor(train_idx, dtype=torch.long, device=device)
     batch = min(int(config.batch_size), max(int(train_idx.size), 1))
+    beh_batch = min(int(config.batch_size), max(int(X_sa_beh.shape[0]), 1))
 
     def sync_predictor() -> None:
         predictor.model = _cpu_inference_model(model)
@@ -2269,17 +2340,16 @@ def _fit_occupancy_neural(
     sync_predictor()
     pred_query_raw = predictor.predict(X_sa_query, postprocess=False)
     pred_beh_raw = predictor.predict(X_sa_beh, postprocess=False)
-    pred_query_state = _project_nonnegative_normalized(
-        pred_query_raw,
-        max_value=config.occupancy_ratio_max,
-        normalize=config.normalize_occupancy,
-        eps=config.occupancy_projection_eps,
-    )
-    pred_beh_state = _project_nonnegative_normalized(
-        pred_beh_raw,
-        max_value=config.occupancy_ratio_max,
-        normalize=config.normalize_occupancy,
-        eps=config.occupancy_projection_eps,
+    pred_query_state, pred_beh_state, fixed_point_initialization_diag = _make_neural_fixed_point_initial_state(
+        fixed_point_initialization=config.fixed_point_initialization,
+        initial_ratio=config.initial_ratio,
+        source_weight_query=source_weight_query,
+        target_builder=build_train,
+        n_behavior_rows=X_sa_beh.shape[0],
+        n_query_rows=q,
+        normalize_occupancy=config.normalize_occupancy,
+        occupancy_ratio_max=config.occupancy_ratio_max,
+        occupancy_projection_eps=config.occupancy_projection_eps,
     )
     loss_name = config._normalized_loss()
 
@@ -2351,6 +2421,13 @@ def _fit_occupancy_neural(
             idx = train_idx_t[torch.randint(train_idx_t.numel(), (batch,), device=device)]
             pred = model(x_query_t[idx])
             loss = _torch_regression_loss(pred, y_t[idx], sw_t[idx], loss=loss_name, huber_delta=loss_delta)
+            if config.occupancy_ess_penalty > 0.0:
+                beh_idx = torch.randint(x_beh_t.shape[0], (beh_batch,), device=device)
+                pred_beh_penalty = model(x_beh_t[beh_idx])
+                loss = loss + float(config.occupancy_ess_penalty) * _torch_occupancy_ess_penalty(
+                    pred_beh_penalty,
+                    mean_penalty=float(config.occupancy_ess_mean_penalty),
+                )
             opt.zero_grad(set_to_none=True)
             loss.backward()
             if config.grad_clip_norm is not None:
@@ -2423,6 +2500,8 @@ def _fit_occupancy_neural(
             eps=float(config.occupancy_projection_eps),
         )
         row["loss"] = loss_name
+        row["occupancy_ess_penalty"] = float(config.occupancy_ess_penalty)
+        row["occupancy_ess_mean_penalty"] = float(config.occupancy_ess_mean_penalty)
         row["validation_improved"] = bool(validation_improved)
         row["validation_warmup_accept"] = bool(warmup_accept and not validation_improved)
         row["validation_warmup_iterations"] = int(config.validation_warmup_iterations)
@@ -2490,6 +2569,7 @@ def _fit_occupancy_neural(
         stop_iter=stop_iter,
         stop_reason=stop_reason,
         refresh_count=refresh_count,
+        fixed_point_initialization_diag=fixed_point_initialization_diag,
         gradient_steps_used=gradient_steps_used,
         accepted_count=accepted_count,
         validation_warmup_accepts=validation_warmup_accepts,
@@ -3165,6 +3245,10 @@ def _transition_lsif_loss(k_obs: torch.Tensor, k_ref: torch.Tensor, normalizatio
     ).pow(2)
 
 
+def _torch_occupancy_ess_penalty(pred_beh: torch.Tensor, *, mean_penalty: float) -> torch.Tensor:
+    return torch.mean(pred_beh.pow(2)) + float(mean_penalty) * (torch.mean(pred_beh) - 1.0).pow(2)
+
+
 def _binary_ratio_loss(logits_den: torch.Tensor, logits_num: torch.Tensor) -> torch.Tensor:
     loss_den = torch.mean(nn.functional.softplus(logits_den))
     loss_num = torch.mean(nn.functional.softplus(-logits_num))
@@ -3509,6 +3593,8 @@ def _neural_history_row(
     ess = _ess(next_beh, eps=eps)
     out["ess"] = float(ess)
     out["ess_fraction"] = float(ess / max(np.asarray(next_beh).size, 1))
+    out["weight_mean"] = float(np.mean(next_beh)) if np.asarray(next_beh).size else float("nan")
+    out["weight_second_moment"] = float(np.mean(np.square(next_beh))) if np.asarray(next_beh).size else float("nan")
     out["weight_max"] = float(np.max(next_beh)) if np.asarray(next_beh).size else float("nan")
     out["weight_p95"] = float(np.quantile(next_beh, 0.95)) if np.asarray(next_beh).size else float("nan")
     out["weight_p99"] = float(np.quantile(next_beh, 0.99)) if np.asarray(next_beh).size else float("nan")

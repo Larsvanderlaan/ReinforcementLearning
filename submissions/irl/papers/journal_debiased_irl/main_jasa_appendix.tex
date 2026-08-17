@@ -186,14 +186,11 @@ efficient influence function
 where
 \[
 \alpha_0(a,s)
-:=
-\left\{\tau^{\star -1}
-\widetilde \rho_{\bar r_0,k_0}^{\star,\gamma'}(s)
-+ \rho_{\bar r_0,k_0}^{\star,\gamma'}(s)\right\}
-\left\{
-\frac{\pi_{\bar r_0,k_0}^{\star,\gamma'}(a\mid s)-\nu(a\mid s)}
-{\pi_0(a\mid s)}
-\right\}.
+:= d_{\bar r_0,k_0}^{\star,\gamma'}(a,s)
++\tau^{\star-1}\widetilde d_{\bar r_0,k_0}^{\star,\gamma'}(a,s)
+-\frac{\nu(a\mid s)}{\pi_0(a\mid s)}
+\left\{\rho_{\bar r_0,k_0}^{\star,\gamma'}(s)
++\tau^{\star-1}\widetilde\rho_{\bar r_0,k_0}^{\star,\gamma'}(s)\right\}.
 \]
 \end{theorem}
 
@@ -284,7 +281,7 @@ occupancy ratio \(\rho_0^{\pi,\gamma}\). The estimator of
   + \frac{1}{n}\sum_{i=1}^n
   \rho_n^{\pi,\gamma}(S_i)
   \left\{
-  1-\frac{\pi(A_i\mid S_i)}{\pi_n(A_i\mid S_i)}
+  \frac{\pi(A_i\mid S_i)}{\pi_n(A_i\mid S_i)}-1
   \right\}.
 \end{align*}
 
@@ -335,23 +332,27 @@ V_n^\star(s)
 \sum_{\tilde a\in\mathcal A^\star}
 \pi_n^\star(\tilde a\mid s)q_n^\star(\tilde a,s),
 \]
-and let \(\widetilde\rho_n^\star\) and \(\rho_n^\star\) estimate
-\(\widetilde\rho_{r_0,k_0}^\star\) and \(\rho_{r_0,k_0}^\star\). The resulting
-estimator of \(\psi_0=E_0\{V_{r_0,k_0}^\star(S)\}\) is
+and let \(d_n^\star\) and \(\widetilde d_n^\star\) estimate the ordinary and
+total advantage-weighted state--action representers. Define
+\[
+\rho_n^\star(s):=\sum_{a\in\mathcal A}\pi_n(a\mid s)d_n^\star(a,s),
+\qquad
+\widetilde\rho_n^\star(s)
+:=\sum_{a\in\mathcal A}\pi_n(a\mid s)\widetilde d_n^\star(a,s).
+\]
+The resulting estimator of \(\psi_0=E_0\{V_{r_0,k_0}^\star(S)\}\) is
 \begin{align*}
 \psi_n
 &:=
 \frac{1}{n}\sum_{i=1}^n V_n^\star(S_i)
 +
 \frac{1}{n}\sum_{i=1}^n
-\rho_n^\star(S_i)
-\frac{\pi_n^\star(A_i\mid S_i)}{\pi_n(A_i\mid S_i)}
+d_n^\star(A_i,S_i)
 \{r_n(A_i,S_i)+\gamma V_n^\star(S_i')-q_n^\star(A_i,S_i)\}
 \\
 &\quad+
 \frac{\gamma}{n\tau^\star}\sum_{i=1}^n
-\widetilde\rho_n^\star(S_i)
-\frac{\pi_n^\star(A_i\mid S_i)}{\pi_n(A_i\mid S_i)}
+\widetilde d_n^\star(A_i,S_i)
 \left[
 \tau^\star
 \log\!\left\{
@@ -367,12 +368,10 @@ v_n^\star(A_i,S_i)
 &\quad+
 \frac{1}{n}\sum_{i=1}^n
 \left\{
-\tfrac{1}{\tau^\star}\widetilde\rho_n^\star(S_i)
-+
-\rho_n^\star(S_i)
-\right\}
-\left\{
-\frac{\pi_n^\star(A_i\mid S_i)}{\pi_n(A_i\mid S_i)}-1
+ d_n^\star(A_i,S_i)
+ +\tfrac{1}{\tau^\star}\widetilde d_n^\star(A_i,S_i)
+ -\rho_n^\star(S_i)
+ -\tfrac{1}{\tau^\star}\widetilde\rho_n^\star(S_i)
 \right\}.
 \end{align*}
 
@@ -381,23 +380,22 @@ The additional conditions for Theorem~\ref{theorem::ALex1b} are stated below.
     \item \label{assump:boundedness::softstar}(\textit{Boundedness})
     There exists $M \in (0,\infty)$ such that, for all $n$ almost surely,
     \[
-      \|\rho_n^\star\|_{L^\infty(\mu)}
-      + \|\widetilde{\rho}_n^\star\|_{L^\infty(\mu)}
+      \|d_n^\star\|_{L^\infty(\lambda)}
+      + \|\widetilde d_n^\star\|_{L^\infty(\lambda)}
       + \|q_n^\star\|_{L^\infty(\lambda)}
       + \|v_n^\star\|_{L^\infty(\lambda)}
       + \|r_n\|_{L^\infty(\lambda)}
-      + \|\pi^{-1}\|_{L^\infty(\lambda)}
       < M.
     \]
 
     \item \label{assump:splitting::softstar}(\textit{Sample splitting})
-    The nuisance estimators $\rho_n^\star$, $\widetilde{\rho}_n^\star$, $q_n^\star$, $v_n^\star$, and $r_n$
+    The nuisance estimators $d_n^\star$, $\widetilde d_n^\star$, $q_n^\star$, $v_n^\star$, and $r_n$
     are constructed using data independent of $\mathcal{D}_n$ (or via cross-fitting).
 
     \item \label{assump:consistency::softstar}(\textit{Consistency})
     \[
-      \|\rho_n^\star - \rho_{r_0,k_0}^\star\|_{L^2(\rho_0)}
-      + \|\widetilde{\rho}_n^\star - \widetilde{\rho}_{r_0,k_0}^\star\|_{L^2(\rho_0)}
+      \|d_n^\star - d_{r_0,k_0}^\star\|_{\mathcal H,r_0}
+      + \|\widetilde d_n^\star - \widetilde d_{r_0,k_0}^\star\|_{\mathcal H,r_0}
       + \|q_n^\star - q_{r_0,k_0}^\star\|_{\mathcal{H},r_0}
       + \|v_n^\star - v_{r_0,k_0}^\star\|_{\mathcal{H},r_0}
       + \|r_n - r_0\|_{\mathcal{H},r_0}
@@ -567,51 +565,170 @@ Assume \ref{cond::rates}\ref{cond::reward} and
 where \(\Sigma_0 := \operatorname{Var}_{P_0}\{\chi_{\theta,0}(S,A,S')\}\).
 \end{theorem}
 
-\section{Additional simulation results for Example~\ref{example::norm}}
+\section{Simulation implementation and diagnostics}
 \label{app::normsim}
 
-We report three versions of the estimator for Example~\ref{example::norm}: a
-\emph{practical} version that estimates the behaviour policy and solves the two
-Bellman equations using the true transition law, a \emph{quasi-oracle} version
-that uses the true \(Q\) nuisances and true occupancy ratio, and a
-\emph{full-oracle} benchmark that also uses the true behaviour policy. For the
-oracle rows, we report only the D-IRL estimator, since a plug-in estimator
-with true nuisances is not an informative comparison.
-Table~\ref{tab:simulation-ex2} reports the main \(n \in \{5000,10000\}\)
-results.
+\paragraph{Neural FORE.}
+Actions are represented by four-dimensional one-hot vectors. Each neural FORE
+fit uses the variational log-partition objective, minibatches of 512, five
+gradient steps per fitted iteration, gradient-norm clipping at 10, and a
+log-ratio cap of 10. Four common target-action draws are reused across candidates
+within a selection event. The pilot library crosses hidden-layer widths
+$(64,64)$ and $(128,128)$, learning rates $3\times10^{-4}$ and $10^{-3}$,
+weight decays $10^{-3}$ and $10^{-2}$, and iteration budgets 10, 30, and 100.
+Ten pilot seeds yield 160 A-PBV selection events across examples, endpoint
+sample sizes, folds, and signed components. The pilot freezes one architecture
+and optimizer configuration by selection frequency across these events; ties are broken by
+mean within-cell rank, smaller width, and stronger regularization. During the
+confirmatory run the stopping library is expanded to 30, 100, and 300 iterations
+after the pilot showed that 100 iterations frequently remained on a decreasing
+validation path. Neural ratio optimization uses a deterministic maximum of
+20,000 rows from each outer training fold. This budget affects only FORE;
+logging-policy and Bellman fitting use the complete outer training fold and the
+EIF is evaluated on every untouched outer-fold observation. In a four-seed
+$n=100000$ audit, capped FORE differed from the exact-ratio estimate by RMSE
+0.0014 and at most 0.0022, retained zero clipping and failures, and reduced
+per-component ratio-fit time by about a factor of 3.4 relative to full-data
+FORE. Setting the cap to zero recovers the full-data appendix diagnostic.
+For Examples~1a--1b, the existing fine-grid Bellman evaluation
+is held fixed as a high-accuracy nuisance benchmark so that this study isolates
+estimated-policy and estimated-ratio error; neither its transition kernel nor
+any grid truth enters FORE or A-PBV.
+The data-fusion study estimates its transition and Bellman nuisances from the
+observed transition source instead.
 
-\begin{table}[htb]
-\centering
-\caption{Example~\ref{example::norm}: practical and oracle benchmarks.
-Coverage refers to the nominal $95\%$ Wald interval for D-IRL.}
-\label{tab:simulation-ex2}
-\begingroup
-\small
-\setlength{\tabcolsep}{4pt}
-\begin{tabular}{llrrrrrrr}
-\toprule
-Method & $n$ & Plug-in bias & Plug-in SD & Plug-in RMSE & D-IRL bias & D-IRL SD & D-IRL RMSE & Coverage \\
-\midrule
-Practical & 5000 & -0.032 & 0.480 & 0.480 & 0.100 & 0.443 & 0.454 & 0.826 \\
-Practical & 10000 & -0.017 & 0.372 & 0.372 & 0.084 & 0.300 & 0.311 & 0.770 \\
-Quasi-oracle & 5000 & --- & --- & --- & -0.064 & 0.316 & 0.322 & 0.862 \\
-Quasi-oracle & 10000 & --- & --- & --- & -0.035 & 0.165 & 0.169 & 0.930 \\
-Full oracle & 5000 & --- & --- & --- & -0.001 & 0.215 & 0.214 & 0.950 \\
-Full oracle & 10000 & --- & --- & --- & 0.007 & 0.143 & 0.143 & 0.974 \\
-\bottomrule
-\end{tabular}
-\endgroup
-\end{table}
+\paragraph{Main and stress designs.}
+The primary logging law is a state-dependent quadratic multinomial logit. The
+quadratic sieve is correctly specified, action probabilities remain bounded
+away from zero, and the action omitted from the adaptive target has about 5\%
+marginal probability. The ordinary-ratio 99th percentile is approximately 12.4
+and the ESS fraction approximately 0.93 in the numerical design check. The
+appendix stress design uses the original soft-MDP logging law; its corresponding
+values are approximately 24.2 and 0.71. We use a $41\times41$ numerical grid.
+Relative to a $61\times61$ reference, this changes the adaptive estimand by
+0.0017, the target policy by less than $6\times10^{-4}$ uniformly, and the
+stationary-weighted ordinary and signed ratios by about 0.2\% and 1.1\% in
+relative $L^2$ error.
 
-The normalization experiment is the most challenging setting in our study. In
-the practical implementation, D-IRL improves on the plug-in estimator in RMSE
-at both \(n=5{,}000\) and \(n=10{,}000\), but interval performance remains
-weaker than in Examples~\ref{example::1a} and~\ref{example::1b}. By contrast,
-the quasi-oracle and full-oracle benchmarks show that inference improves
-markedly once the hard nuisance components are supplied accurately: coverage
-rises to \(0.930\)--\(0.974\) at \(n=10{,}000\), and the full-oracle estimator
-already reaches \(0.950\) at \(n=5{,}000\). The small-sample stress tests at
-\(n \in \{1000,2500\}\) show the same pattern with much larger variance.
+\paragraph{Held-out A-PBV score.}
+Let $w_i$ and $w_j$ be two positive normalized ratio candidates and define
+$\ell_{ij}=\log(w_i/w_j)$. Using held-out empirical transition and
+initial-source terms, candidate $i$ is compared with candidate $j$ using
+\[
+\widehat S_{ij}
+=\mathbb P_n\!\left[w_i(X)
+  \{\ell_{ij}(X)-\gamma(\pi\ell_{ij})(S')\}\right]
+ -(1-\gamma)\mathbb P_{0,n}\ell_{ij}(X_0)
+ -\frac{1-\gamma}{4}\mathbb P_n
+  \{\sqrt{w_i(X)}-\sqrt{w_j(X)}\}^2.
+\]
+The selected index is the first element of
+$\arg\min_i\max_j\widehat S_{ij}$. Because the action space has size four,
+$(\pi\ell_{ij})(S')$ and the initial-state analogue are evaluated by exact
+action summation. Candidate fitting and validation use a deterministic
+60/20/20 split within each outer training fold: the middle block selects the
+ordinary ratio and the last block selects the signed components. Within each
+20\% validation block, the same held-out rows estimate the transition and
+initial-source terms of the empirical A-PBV objective; this improves validation
+precision without touching the outer evaluation fold. Simulation truth does not
+enter either selection.
+
+FORE returns the normalized discounted state--action ratio $w$. The EIF in the
+main paper uses the unnormalized convention, so the implementation sets
+$\widehat d=w/(1-\gamma)$ and recovers the state ratio by
+\[
+\widehat\rho(s)=\sum_a\widehat\pi_0(a\mid s)\widehat d(s,a).
+\]
+This permits the numerically stable correction
+$\widehat d(S,A)\widehat\varepsilon(S,A)+\widehat d(S,A)-
+\widehat\rho(S)$ without separately dividing by a fitted behaviour propensity.
+
+\paragraph{Signed advantage-weighted ratio.}
+On the ratio-training data define
+\[
+Z_i=\widehat d^\star(S_i,A_i)
+ \{\widehat q^\star(S_i,A_i)-\widehat V^\star(S_i)\},
+\qquad
+m_\pm=\mathbb P_n(Z_i)_\pm.
+\]
+We use the successor states weighted by $(Z_i)_+$ and $(Z_i)_-$ as two initial
+source measures, fit their normalized FORE ratios $w_+$ and $w_-$ separately,
+and set
+\[
+\widehat{\widetilde d}(x)
+=\widehat z(x)
++\frac{\gamma}{1-\gamma}\{m_+w_+(x)-m_-w_-(x)\},
+\qquad
+\widehat z(s,a):=\widehat d^\star(s,a)
+\{\widehat q^\star(s,a)-\widehat V^\star(s)\}.
+\]
+The Jordan fits estimate only the strictly future component because their
+initial measures are supported on successor states. For EIF evaluation we add
+the current term \(\widehat z\), evaluate the total ratio at every action, and
+set
+\[
+\widehat{\widetilde\rho}(s)
+:=\sum_a\widehat\pi_0(a\mid s)\widehat{\widetilde d}(s,a).
+\]
+The current state average is zero at the population truth, but it need not be
+zero for estimated nuisances and is therefore retained.
+A component is set to zero when its empirical source mass is below $10^{-10}$.
+Positive and negative components have independent A-PBV selections.
+
+\paragraph{Data fusion.}
+The transition source records $(S,A,S')$ and the known logging propensities but
+withholds rewards. The auxiliary source records only $(S,Y)$ over the state
+domain, with
+$E(Y\mid S=s)=g(s)=\sum_a\nu(a\mid s)r_0(s,a)$ for a known uniform randomized
+normalization policy $\nu$; actions are absent by design. We fit $g$ once using
+$10^6$ outcome-summary observations with noise standard deviation 0.2. A
+deterministic 80/20 split selects a small tanh network on quadratic features by
+held-out outcome mean-squared error; three source-only refits are averaged and
+intercept-calibrated, then frozen across all transition replications. The
+selected regression has grid RMSE 0.0024 and induces an estimand change of
+0.0030 at target discount 0.8. Within each outer training fold, an
+action-specific degree-three ridge sieve estimates the two conditional
+transition means under a diagonal Gaussian law, with regularization selected by
+held-out next-state mean-squared error and innovation scales estimated on that
+validation block. The fitted transition is discretized on the fixed evaluation
+grid, after which the normalization and target-policy Bellman equations are
+solved deterministically. These selectors receive neither the oracle transition
+kernel nor reward or estimand truth. Before the
+confirmatory run, the oracle-grid change in the target induced by replacing
+$g$ with $\widehat g$ must be smaller than 10\% of the pilot median D-IRL
+standard error. This is a labeled readiness diagnostic, not an estimator or
+hyperparameter selection rule. The reported confidence intervals condition on
+the frozen outcome source and do not include its sampling uncertainty.
+
+\paragraph{Reproducibility and oracle diagnostics.}
+Each run stores raw estimates, Monte Carlo summaries, candidate-level A-PBV
+rows, the frozen configuration, random seeds, ratio-tail diagnostics, runtime,
+and failures. Oracle ratios and fine-grid targets are used only in explicitly
+labeled diagnostic output after fitting. In particular, a population-grid
+check verifies that the positive-minus-negative FORE normalization above
+reconstructs the oracle signed state--action ratio. All estimator comparisons
+use common data-generating seeds; changing the ratio estimator never changes the
+sampled dataset. The execution order is a two-seed smoke test, the truth-blind
+selection pilot, and the locked 300-replication confirmatory study. Example~1a
+and data fusion use $n\in\{2500,5000,10000\}$, while Example~1b uses
+$n\in\{25000,50000,100000\}$.
+
+\paragraph{Confirmatory fit diagnostics.}
+The locked study contains 2,700 successful replications and no ratio failure,
+nonfinite inferential quantity, or clipping event. For the ordinary ratio,
+A-PBV never selects 30 iterations. The shares selecting 300 iterations are
+22\%, 40\%, and 64\% across the three Example~1a sample sizes; 77--79\% in
+Example~1b; and 31\%, 59\%, and 79\% in the data-fusion study. We report this
+boundary behavior rather than using it to alter the locked library. The
+pre-confirmatory exact-ratio audits described above show that the resulting
+large-sample FORE estimates are already close to the exact-ratio benchmark.
+Across the adaptive-policy cells, the signed positive and negative components
+have mean normalized masses 1.000--1.001, effective-sample fractions
+0.68--0.73, mean 99th percentiles 14.0--18.7, and no clipping. The strict
+artifact assembler verifies all predeclared seeds, fold-level stopping choices,
+finite telemetry, frozen-input hashes, and raw-to-summary agreement. Coverage
+calibration is computed only after fitting and is never used to select or
+suppress a reported cell.
 
 
 
@@ -2966,12 +3083,18 @@ The first equality in \eqref{eqn::identity1} uses the resolvent identity,
 the second uses the Neumann-series expansion of the inverse,
 and the last applies the Radon--Nikodym derivative to express discounted
 trajectory expectations as a reweighted expectation under the initial state distribution. 
-We will also use that, for any state–action function \(h\),
+Define
+\[
+z_{r_0,k_0}^\star
+:=d_{r_0,k_0}^\star(q_{r_0,k_0}^\star-V_{r_0,k_0}^\star).
+\]
+By the adjoint definition in \eqref{eqn::tilderho}, for every state--action
+function \(h\),
 \begin{equation}
-    \label{eqn::identity2}
-\big((\mathcal{T}_{r_0,k_0}^\star)^{-1} h\big)(A,S)
-= \int \sum_{a' \in \mathcal{A}^\star} d_{r_0,k_0}^{\star}(a',s'\mid A,S)\,h(a',s')\,
-\pi_0(a'\mid s')\,\rho_0(s')\,d\mu(s').
+\label{eqn::identity2}
+E_0\!\left[z_{r_0,k_0}^\star(A,S)
+\{(\mathcal T_{r_0,k_0}^\star)^{-1}h\}(A,S)\right]
+=E_0\!\left[\widetilde d_{r_0,k_0}^\star(A,S)h(A,S)\right].
 \end{equation}
 
 \noindent \textbf{Determining the $\alpha_0$ component (partial derivative in $r$).}
@@ -3050,14 +3173,16 @@ where the final equality uses that
 \big((I-\Pi_{r_0,k_0}^\star)(\mathcal{T}_{r_0,k_0}^\star)^{-1} r_0\big)(A,S)\;
 \big(\Pi_{r_0,k_0}^\star(\mathcal{T}_{r_0,k_0}^\star)^{-1} h\big)(S)
 \Big] \\
-&= (1-\gamma)\,E_{d_{r_0,k_0}^\star}\Big[
+&= \frac{1}{1-\gamma}\,E_{d_{r_0,k_0}^\star}\Big[
 \big((I-\Pi_{r_0,k_0}^\star)(\mathcal{T}_{r_0,k_0}^\star)^{-1} r_0\big)(A,S)\;
 \big(\Pi_{r_0,k_0}^\star(\mathcal{T}_{r_0,k_0}^\star)^{-1} h\big)(S)
 \Big] \\
 &= 0,
 \end{align*}
-where \(E_{d_{r_0,k_0}^\star}\) is the expectation under the normalized probability distribution
-\(\tfrac{1}{1-\gamma}\,d_{r_0,k_0}^\star\), and the final equality follows from the law of total expectation, since
+where \(E_{d_{r_0,k_0}^\star}\) is expectation under the probability
+distribution with density \((1-\gamma)d_{r_0,k_0}^\star\) relative to the
+law of \((A,S)\), and the final equality follows from the law of total
+expectation, since
 \[
 E_{d_{r_0,k_0}^\star}\!\left[
 \big((I-\Pi_{r_0,k_0}^\star)(\mathcal{T}_{r_0,k_0}^\star)^{-1} r_0\big)(A,S)\,\Big|\,S
@@ -3073,37 +3198,12 @@ Using that \(q_{r_0,k_0}^\star - V_{r_0,k_0}^\star = (I-\Pi_{r_0,k_0}^\star)(\ma
 \begin{align*}
 E_0 \!\left[\partial_r \!\left[ \Pi_{r,k}^\star (\mathcal{T}_{r,k}^\star)^{-1}\right][h](r_0)\Big|_{(r_0,k_0)}(S) \right]
 &= \frac{1}{\tau^\star}\,
-E_0\!\Big[d_{r_0,k_0}^\star(A,S)\,
-\big(q_{r_0,k_0}^\star - V_{r_0,k_0}^\star\big)(A,S)\,
-\big((\mathcal{T}_{r_0,k_0}^\star)^{-1} h\big)(A,S)\Big].
+E_0\!\left[z_{r_0,k_0}^\star(A,S)\,
+\big\{(\mathcal{T}_{r_0,k_0}^\star)^{-1} h\big\}(A,S)\right] \\
+&=\frac{1}{\tau^\star}
+E_0\!\left[\widetilde d_{r_0,k_0}^\star(A,S)h(A,S)\right],
 \end{align*}
-Applying the kernel form \eqref{eqn::identity2} of \(\big(\mathcal{T}_{r_0,k_0}^\star\big)^{-1}h\), we obtain
-\begin{align*}
-E_0 \!\left[\partial_r \!\left[ \Pi_{r,k}^\star (\mathcal{T}_{r,k}^\star)^{-1}\right][h](r_0)\Big|_{(r_0,k_0)} \right]
-&= \frac{1}{\tau^\star}\,
-E_0\!\Bigg[d_{r_0,k_0}^\star(A,S)\,\big(q_{r_0,k_0}^\star - V_{r_0,k_0}^\star\big)(A,S) \\
-&\qquad\qquad \times
-\int \sum_{a'\in\mathcal{A}^\star} d_{r_0,k_0}^{\star}(a',s'\mid A,S)\,h(a',s')\,
-\pi_0(a'\mid s')\,\rho_0(s')\,d\mu(s')\Bigg] \\
-&= \frac{1}{\tau^\star}\,
-\iint \sum_{a'\in\mathcal{A}^\star}
-E_0\!\Big[d_{r_0,k_0}^\star(A,S)\,
-\big(q_{r_0,k_0}^\star - V_{r_0,k_0}^\star\big)(A,S)\,
-d_{r_0,k_0}^{\star}(a',s'\mid A,S)\Big] \\
-&\qquad\qquad \times h(a',s')\,\pi_0(a'\mid s')\,\rho_0(s')\,d\mu(s'),
-\end{align*}
-where the second line uses Fubini’s theorem. Defining
-\[
-\widetilde{d}_{r_0,k_0}^\star(a',s')
-\;:=\;E_0\!\Big[d_{r_0,k_0}^\star(A,S)\,\big(q_{r_0,k_0}^\star - V_{r_0,k_0}^\star\big)(A,S)\,
-d_{r_0,k_0}^{\star}(a',s'\mid A,S)\Big],
-\]
-we obtain that
-\[
-E_0 \!\left[\partial_r \!\left[ \Pi_{r,k}^\star (\mathcal{T}_{r,k}^\star)^{-1}\right][h](r_0)\Big|_{(r_0,k_0)} \right]
-= \frac{1}{\tau^\star}E_0[\widetilde{d}_{r_0,k_0}^\star(A,S)\,h(A,S)].
-\]
-Hence,
+where the second equality is \eqref{eqn::identity2}. Hence,
 \begin{equation}
 \label{eqnproof::alpha02}
     E_0 \!\left[\partial_r \!\left[ \Pi_{r,k}^\star (\mathcal{T}_{r,k}^\star)^{-1}\right][h](r_0)\Big|_{(r_0,k_0)} \right] = \frac{1}{\tau^\star}E_0[\widetilde{d}_{r_0,k_0}^\star(A,S)\,h(A,S)],
@@ -3111,9 +3211,7 @@ Hence,
  where
  \[
  \alpha_{0,2}(a,s)
- := \frac{1}{\tau^\star}\widetilde{d}_{r_0,k_0}^\star(a,s)
- = \frac{1}{\tau^\star}\widetilde{\rho}_{r_0,k_0}^\star(s)
- \frac{\pi_{r_0,k_0}^\star(a\mid s)}{\pi_0(a\mid s)}.
+ := \frac{1}{\tau^\star}\widetilde{d}_{r_0,k_0}^\star(a,s).
  \]
 Combining \eqref{eqnproof::alpha01} and \eqref{eqnproof::alpha02}, we conclude that
 \[
@@ -3123,7 +3221,8 @@ E_0\!\left[\partial_r\!\left[\Pi_{r,k}^\star (\mathcal T_{r,k}^\star)^{-1}(r)\ri
 where
 \begin{equation}
     \label{eqn::alphastar}
-    \alpha_0(a,s) := \left\{\frac{1}{\tau^\star}\,\widetilde{\rho}_{r_0,k_0}^\star(s)  + \rho_{r_0,k_0}^{\star}(s) \right\} \frac{\pi_{r_0, k_0}^\star(a \mid s)}{\pi_0(a\mid s)}.
+    \alpha_0(a,s) := d_{r_0,k_0}^\star(a,s)
+    +\frac{1}{\tau^\star}\widetilde d_{r_0,k_0}^\star(a,s).
 \end{equation}
  
 
@@ -3204,60 +3303,22 @@ where we recall that
 $$\Phi_{r_0,k_0}^\star(s) = \tau^\star \log\!\big(\sum_{\tilde a \in \mathcal{A}^\star} \exp((r_0(\tilde a,s) + \gamma\,v_{r_0,k_0}^\star(\tilde a,s))/\tau^\star)\big).$$
 
 
-We recall, by \eqref{eqn::identity2}, that for any state–action function \(h\),
-\[
-\big((\mathcal{T}_{r_0,k_0}^\star)^{-1} h\big)(A,S)
-= \int \sum_{a' \in \mathcal{A}^\star} d_{r_0,k_0}^{\star}(a',s'\mid A,S)\,h(a',s')\,
-\pi_0(a'\mid s')\,\rho_0(s')\,d\mu(s').
-\]
-Thus,
+Applying \eqref{eqn::identity2} with
+\(h=\mathcal P_{k_0\beta}\Phi_{r_0,k_0}^\star\) gives
 \begin{align*}
-\big((\mathcal{T}_{r_0,k_0}^\star)^{-1}\mathcal{P}_{k_0\beta} \,\Phi_{r_0,k_0}^\star\big)(A,S)
-&= \int \sum_{a' \in \mathcal{A}^\star} d_{r_0,k_0}^{\star}(a',s'\mid A,S)
-\left\{\int \Phi_{r_0,k_0}^\star(\tilde s)\,k_0(\tilde s\mid a',s')\,\beta(\tilde s\mid a',s')\,d\mu(\tilde s)\right\}
-\notag\\
-&\qquad\qquad \times \pi_0(a'\mid s')\,\rho_0(s')\,d\mu(s')\\
-&= \iint \sum_{a' \in \mathcal{A}^\star} d_{r_0,k_0}^{\star}(a',s'\mid A,S)\,
- \Phi_{r_0,k_0}^\star(\tilde s)\,k_0(\tilde s\mid a',s')\,\beta(\tilde s\mid a',s')\,
- \pi_0(a'\mid s')\,\rho_0(s')\,d\mu(s')\,d\mu(\tilde s) \\
-&= \iint \sum_{a \in \mathcal{A}^\star} d_{r_0,k_0}^{\star}(a,s\mid A,S)\,
- \Phi_{r_0,k_0}^\star(s')\,k_0(s'\mid a,s)\,\beta(s'\mid a,s)\,
- \pi_0(a\mid s)\,\rho_0(s)\,d\mu(s)\,d\mu(s') \\
-&= \iint \sum_{a \in \mathcal{A}^\star} d_{r_0,k_0}^{\star}(a,s\mid A,S)\,
- \Phi_{r_0,k_0}^\star(s') \notag\\
-&\qquad\qquad \times
- \beta(s'\mid a,s)\,P_0(ds',a,ds),
+&\frac{\gamma}{\tau^\star}
+E_0\!\left[z_{r_0,k_0}^\star(A,S)
+\{(\mathcal T_{r_0,k_0}^\star)^{-1}
+\mathcal P_{k_0\beta}\Phi_{r_0,k_0}^\star\}(A,S)\right] \\
+&\qquad=\frac{\gamma}{\tau^\star}
+E_0\!\left[\widetilde d_{r_0,k_0}^\star(A,S)
+\{\mathcal P_{k_0\beta}\Phi_{r_0,k_0}^\star\}(A,S)\right] \\
+&\qquad=\frac{\gamma}{\tau^\star}
+E_0\!\left[\widetilde d_{r_0,k_0}^\star(A,S)
+\Phi_{r_0,k_0}^\star(S')\beta(S'\mid A,S)\right].
 \end{align*}
-where the penultimate equality uses Fubini to swap the order of integration and renames the dummy variables \((a',s',\tilde s)\) as \((a,s,s')\).
-
-It follows that
-\[
-\begin{aligned}
-&\tfrac{\gamma}{\tau^\star}\,
-E_0\!\left[d_{r_0,k_0}^{\star}(A,S)\,
-\big((I-\Pi_{r_0,k_0}^\star)(\mathcal{T}_{r_0,k_0}^\star)^{-1} r_0\big)(A,S)\;
-\big((\mathcal{T}_{r_0,k_0}^\star)^{-1}\mathcal{P}_{k_0\beta}\,\Phi_{r_0,k_0}^\star\big)(A,S)
-\right] \\
-&\qquad= \tfrac{\gamma}{\tau^\star}
-\iint \sum_{a\in\mathcal{A}^\star} \widetilde{d}_{r_0,k_0}^\star(a,s)\,
-\Phi_{r_0,k_0}^\star(s') \\
-&\qquad\qquad\qquad \times
-\beta(s'\mid a,s)\,P_0(da,ds,ds'),
-\end{aligned}
-\]
-where
-\[
-\begin{aligned}
-\widetilde{d}_{r_0,k_0}^\star(a,s)
-&:= E_0\!\left[d_{r_0,k_0}^{\star}(A,S)\,
-\big((I-\Pi_{r_0,k_0}^\star)(\mathcal{T}_{r_0,k_0}^\star)^{-1} r_0\big)(A,S)\,
-d_{r_0,k_0}^{\star}(a,s\mid A,S)\right] \\
-&= E_0\!\left[d_{r_0,k_0}^{\star}(A,S)\,
-\{q_{r_0,k_0}^\star - V_{r_0,k_0}^\star\}(A,S)\right. \\
-&\qquad\qquad \left.
-\times d_{r_0,k_0}^{\star}(a,s\mid A,S)\right].
-\end{aligned}
-\]
+The last equality follows from the definition of the additive kernel
+direction \(k_0\beta\) and Fubini's theorem.
 Define 
 \[
 \begin{aligned}
@@ -3366,16 +3427,17 @@ By Theorem~\ref{theorem::EIF}, the nonparametric EIF is given by
 Moreover, using our expression for $\alpha_0$ in \eqref{eqn::alphastar}, we can write
 \begin{align*}
  \alpha_0(a,s) - \sum_{a'\in\mathcal{A}} \pi_0(a'\mid s)\,\alpha_0(a',s) 
-=  \left\{\frac{1}{\tau^\star}\,\widetilde{\rho}_{r_0,k_0}^\star(s)  + \rho_{r_0,k_0}^{\star}(s) \right\} \left\{\frac{\pi_{r_0,k_0}^\star(a\mid s)}{\pi_0(a\mid s)} - 1\right\}.
+=d_{r_0,k_0}^\star(a,s)
++\frac{1}{\tau^\star}\widetilde d_{r_0,k_0}^\star(a,s)
+-\rho_{r_0,k_0}^\star(s)
+-\frac{1}{\tau^\star}\widetilde\rho_{r_0,k_0}^\star(s).
 \end{align*}
-where
-\[
-\widetilde{\rho}_{r_0,k_0}^\star(s)
-:= E_0\!\big[d_{r_0,k_0}^\star(A,S)\,\big(q_{r_0,k_0}^\star - V_{r_0,k_0}^{\star}\big)(A,S)\,\rho_{r_0,k_0}^\star(s\mid A,S)\big].
-\]
 Thus, substituting our expression for $\beta_0$, we conclude that
 \begin{align*}
-   \chi_0(s,a,s') &= \left\{\frac{1}{\tau^\star}\,\widetilde{\rho}_{r_0,k_0}^\star(s)  + \rho_{r_0,k_0}^{\star}(s) \right\} \left\{\frac{\pi_{r_0,k_0}^\star(a\mid s)}{\pi_0(a\mid s)} - 1\right\}  \\
+   \chi_0(s,a,s') &= d_{r_0,k_0}^\star(a,s)
+   +\frac{1}{\tau^\star}\widetilde d_{r_0,k_0}^\star(a,s)
+   -\rho_{r_0,k_0}^\star(s)
+   -\frac{1}{\tau^\star}\widetilde\rho_{r_0,k_0}^\star(s) \\
    &\quad + \frac{\gamma}{\tau^\star}\,\widetilde{d}_{r_0,k_0}^\star(a,s)\Big(V_{r_0,k_0}^{\star,\mathrm{soft}}(s')-v_{r_0,k_0}^\star(a,s)\Big) \\
    &\quad + d_{r_0,k_0}^\star(a,s)\,\Big\{\,r_0(a,s) + \gamma\,V_{r_0,k_0}^{\star}(s') - q_{r_0,k_0}^\star(a,s)\,\Big\}\\
    &\quad + m(a,s, r_0, k_0) - \Psi(P_0).
@@ -3403,9 +3465,8 @@ Riesz representers of the partial derivatives of
 \((r,k) \mapsto E_0[\tilde m(A,S,r,k)]\) at \((\bar r_0,k_0)\) are
 \[
 \tilde\alpha_0(a,s)
-= \left\{\frac{1}{\tau^\star}\,\widetilde\rho_{\bar r_0,k_0}^{\star,\gamma'}(s)
-+ \rho_{\bar r_0,k_0}^{\star,\gamma'}(s)\right\}
-\frac{\pi_{\bar r_0,k_0}^{\star,\gamma'}(a\mid s)}{\pi_0(a\mid s)}
+=d_{\bar r_0,k_0}^{\star,\gamma'}(a,s)
++\frac{1}{\tau^\star}\widetilde d_{\bar r_0,k_0}^{\star,\gamma'}(a,s)
 \]
 and
 \[
@@ -3441,23 +3502,23 @@ Since
 \[
 \sum_{\tilde a \in \mathcal{A}} \pi_0(\tilde a\mid s)\,\tilde\alpha_0(\tilde a,s)
 = \left\{\frac{1}{\tau^\star}\,\widetilde\rho_{\bar r_0,k_0}^{\star,\gamma'}(s)
-+ \rho_{\bar r_0,k_0}^{\star,\gamma'}(s)\right\}
-\sum_{\tilde a \in \mathcal{A}} \pi_{\bar r_0,k_0}^{\star,\gamma'}(\tilde a\mid s),
++ \rho_{\bar r_0,k_0}^{\star,\gamma'}(s)\right\},
 \]
 we obtain
 \[
 \alpha_0(a,s)
-= \left\{\frac{1}{\tau^\star}\,\widetilde\rho_{\bar r_0,k_0}^{\star,\gamma'}(s)
-+ \rho_{\bar r_0,k_0}^{\star,\gamma'}(s)\right\}
-\left\{\frac{\pi_{\bar r_0,k_0}^{\star,\gamma'}(a\mid s)}{\pi_0(a\mid s)}
-- \frac{\nu(a\mid s)}{\pi_0(a\mid s)}\right\}.
+=d_{\bar r_0,k_0}^{\star,\gamma'}(a,s)
++\frac{1}{\tau^\star}\widetilde d_{\bar r_0,k_0}^{\star,\gamma'}(a,s)
+-\frac{\nu(a\mid s)}{\pi_0(a\mid s)}
+\left\{\rho_{\bar r_0,k_0}^{\star,\gamma'}(s)
++\frac{1}{\tau^\star}\widetilde\rho_{\bar r_0,k_0}^{\star,\gamma'}(s)\right\}.
 \]
 It follows immediately that
 \[
 \sum_{\tilde a \in \mathcal{A}} \pi_0(\tilde a\mid s)\,\alpha_0(\tilde a,s) = 0,
 \]
-because both \(\pi_{\bar r_0,k_0}^{\star,\gamma'}(\cdot\mid s)\) and
-\(\nu(\cdot\mid s)\) sum to one.
+by the definitions of the state averages and because
+\(\nu(\cdot\mid s)\) sums to one.
 
 Finally, Theorem~\ref{theorem::EIF} yields
 \[
@@ -3806,815 +3867,196 @@ Rearranging terms,
 
 
 
-In the following lemma, for each $(r, v^\star)$, define
+For the next lemma, write
 \[
-\pi_{r,v^\star}^\star(a \mid s)
-\;\propto\;
-\mathbf{1}\{a \in \mathcal{A}^\star\}
-\exp\!\left\{
-    \tfrac{1}{\tau^\star}\bigl(r(a,s) + \gamma v^\star(a,s)\bigr)
-\right\}.
+\pi_{r,v}^\star(a\mid s)
+\propto
+\mathbf 1\{a\in\mathcal A^\star\}
+\exp\!\left[\tau^{\star-1}\{r(a,s)+\gamma v(a,s)\}\right],
 \]
-Further, define
+and define
 \[
-\Phi_{r,v^\star}^\star(s)
-\;:=\;
-\tau^\star \log\!\Biggl(
-\sum_{a \in \mathcal{A}^\star}
-\exp\!\left\{
-    \tfrac{1}{\tau^\star}\bigl(r(a,s) + \gamma v^\star(a,s)\bigr)
-\right\}
-\Biggr),
+\Phi_{r,v}^\star(s)
+:=\tau^\star\log\!\sum_{a\in\mathcal A^\star}
+\exp\!\left[\tau^{\star-1}\{r(a,s)+\gamma v(a,s)\}\right],
+\qquad
+V_{q,r,v}^\star(s)
+:=\sum_{a\in\mathcal A^\star}\pi_{r,v}^\star(a\mid s)q(a,s).
 \]
-and let $\widetilde{d}_{r,v,\widetilde{\rho}^\star}^\star(a,s)
-\;=\;
-\widetilde{\rho}^\star(s)
-\frac{\pi_{r,v^\star}^\star(a \mid s)}{\pi_r(a \mid s)}.$
-
+For arbitrary state--action functions \(d\) and \(\widetilde d\), set
+\[
+\rho_{d,r}(s):=\sum_{a\in\mathcal A}\pi_r(a\mid s)d(a,s),
+\qquad
+\widetilde\rho_{\widetilde d,r}(s)
+:=\sum_{a\in\mathcal A}\pi_r(a\mid s)\widetilde d(a,s),
+\]
+where \(\pi_r=\exp(r)\). Throughout this lemma, \(r\) ranges over normalized
+log-policy functions, so \(\sum_a\exp\{r(a,s)\}=1\) almost surely.
 
 \begin{lemma}[von Mises expansion for soft optimal value]
 \label{lemma::vonmises_softstar}
-Let $q^\star, r, v^\star \in L^\infty(\lambda)$ and let $\rho^\star, \widetilde{\rho}^\star \in L^\infty(\mu)$ be arbitrary functions. Then
-    \begin{align*}
-&\;E_0\!\Big[
-    \sum_{a \in \mathcal{A}^\star} 
-        \pi_{r,v^\star}^\star(a \mid S)\,q^\star(a,S) 
-        - 
-        \sum_{a \in \mathcal{A}^\star} 
-        \pi_{r_0,k_0}^\star(a \mid S)\,q_{r_0,k_0}^\star(a,S)
-\Big]
-\\
-&\quad+\;
-E_0\!\Big[
-    \rho^\star(S)\,
-    \tfrac{\pi_{r,v^\star}^\star}{\pi_r}(A \mid S)\,
-    \bigl\{ r(A,S)+\gamma\,V_{0,q^\star}^\star(S')-q^\star(A,S)\bigr\}
-\Big]
-\\
-&\quad+\;
-E_0\!\Big[
-    \rho^\star(S)\,
-    \Bigl\{1-\tfrac{\pi_{r,v^\star}^\star}{\pi_r}(A \mid S)\Bigr\}
-\Big]
-\\
-&\quad+\;
-\frac{\gamma}{\tau^\star}\,
-E_0\!\Big[
-       \widetilde{d}_{r,v,\widetilde{\rho}^\star}^\star(A,S)\,
-       \Bigl(\Phi_{r,v^\star}^\star(S') - v^\star(A,S)\Bigr)
-\Big]
-\\
-&\quad+\;
-\frac{1}{\tau^\star}\,
-E_0\!\Big[
-        \widetilde{\rho}^\star(S)\,
-        \Bigl(\tfrac{\pi_{r,v^\star}^\star}{\pi_r}-1\Bigr)(A \mid S)
-\Big]
-\\[6pt]
-&=\;
-O\!\Big(
-     \|\rho^\star - \rho_{r_0,k_0}^\star\|_{\mathcal{H},r_0}\,
-     \bigl\|\mathcal{T}_{r_0,k_0}^\star(q^\star - q_{r_0,k_0}^\star)\bigr\|_{\mathcal{H},r_0}
-\\
-&\hspace{2.2cm}
-     +\;
-     \bigl(\|r-r_0\|_{\mathcal{H},r_0} + \|v^\star - v_{r_0,k_0}^\star\|_{\mathcal{H},r_0}\bigr)\,
-     \bigl\|\mathcal{T}_{r_0,k_0}^\star(q^\star - q_{r_0,k_0}^\star)\bigr\|_{\mathcal{H},r_0}
-\\
-&\hspace{2.2cm}
-     +\;
-     \|r-r_0\|_{\mathcal{H},r_0}^{2}
-     +\;
-     \|v^\star - v_{r_0,k_0}^\star\|_{\mathcal{H},r_0}^{2}
-     +\;
-     \|\widetilde{\rho}^\star - \widetilde{\rho}_{r_0,k_0}^\star\|_{\mathcal{H},r_0}\,
-     \bigl(\|r-r_0\|_{\mathcal{H},r_0}+\|v^\star - v_{r_0,k_0}^\star\|_{\mathcal{H},r_0}\bigr)
-\Big),
+Let \(q,r,v,d,\widetilde d\in L^\infty(\lambda)\), with \(r\) normalized as
+above, and define the
+uncentered score
+\begin{align*}
+\varphi_{r,v,q,d,\widetilde d}(s',a,s)
+:={}&V_{q,r,v}^\star(s)
++d(a,s)\{r(a,s)+\gamma V_{q,r,v}^\star(s')-q(a,s)\}\\
+&+d(a,s)-\rho_{d,r}(s)\\
+&+\frac{1}{\tau^\star}\left[
+\widetilde d(a,s)
++\gamma\widetilde d(a,s)\{\Phi_{r,v}^\star(s')-v(a,s)\}
+-\widetilde\rho_{\widetilde d,r}(s)
+\right].
 \end{align*}
-where the implicit constant in the big-$O$ term depends only on 
-\(\|q^\star\|_\infty\), 
-\(\|r\|_\infty\), 
-\(\|r_0\|_\infty\), 
-\(\|v^\star\|_\infty\), 
-\(\|v_{r_0,k_0}^\star\|_\infty\), 
-\(\|\rho^\star\|_\infty\), 
-\(\|\widetilde{\rho}^\star\|_\infty\), 
-\(\gamma\), and \(\tau^\star\).
-
+Suppose these functions and their true counterparts lie in a common bounded
+\(L^\infty(\lambda)\) ball. Then, in a sufficiently small neighborhood of the
+truth in \(\|\cdot\|_{\mathcal H,r_0}\),
+\begin{align}
+\left|E_0\{\varphi_{r,v,q,d,\widetilde d}(S',A,S)\}-\psi_0\right|
+\lesssim{}&
+\left(
+\|d-d_{r_0,k_0}^\star\|_{\mathcal H,r_0}
++\|r-r_0\|_{\mathcal H,r_0}
++\|v-v_{r_0,k_0}^\star\|_{\mathcal H,r_0}
+\right)\notag\\
+&\quad\times
+\left(
+\|\mathcal T_{r_0,k_0}^\star(q-q_{r_0,k_0}^\star)\|_{\mathcal H,r_0}
++\|r-r_0\|_{\mathcal H,r_0}
++\|v-v_{r_0,k_0}^\star\|_{\mathcal H,r_0}
+\right)\notag\\
+&+
+\|\widetilde d-\widetilde d_{r_0,k_0}^\star\|_{\mathcal H,r_0}
+\left(
+\|r-r_0\|_{\mathcal H,r_0}
++\|v-v_{r_0,k_0}^\star\|_{\mathcal H,r_0}
+\right).
+\label{eq:softstar-vm-total}
+\end{align}
+The implicit constant depends only on the uniform bounds, \(\gamma\),
+\(\tau^\star\), and the local operator bounds used below.
 \end{lemma}
 
-
-\begin{proof}[Proof of Lemma \ref{lemma::vonmises_softstar}]
-    
- 
-In this proof, write $v_0 := v_{r_0,k_0}^\star$, so that
-\(\pi_{r_0,v_0}^\star = \pi_{r_0,k_0}^\star\), and, for each $(r,v^\star)$,
+\begin{proof}
+Abbreviate
 \[
-Q_{r,v^\star} := r + \gamma v^\star,
-\qquad
-\Phi_{r,v^\star}^\star(s)
-:= \tau^\star \log\!\Biggl(
-\sum_{a \in \mathcal{A}^\star}
-\exp\!\left\{
-    \tfrac{1}{\tau^\star}\bigl(r(a,s) + \gamma v^\star(a,s)\bigr)
+q_0:=q_{r_0,k_0}^\star,\quad
+v_0:=v_{r_0,k_0}^\star,\quad
+d_0:=d_{r_0,k_0}^\star,\quad
+\widetilde d_0:=\widetilde d_{r_0,k_0}^\star,
+\]
+and let \(\pi^\star:=\pi_{r,v}^\star\),
+\(\pi_0^\star:=\pi_{r_0,v_0}^\star\),
+\(\Delta q:=q-q_0\), and
+\(\Delta Q:=(r-r_0)+\gamma(v-v_0)\).
+Split the left-hand side of \eqref{eq:softstar-vm-total} into the terms
+linear in \(\Delta q\), denoted \(R_q\), and the remaining terms, denoted
+\(R_{\mathrm{pol}}\).
+
+For the first part,
+\[
+R_q
+=E_0[V_{\Delta q,r,v}^\star(S)]
++E_0\!\left[d(A,S)
+\{\gamma V_{\Delta q,r,v}^\star(S')-\Delta q(A,S)\}\right].
+\]
+The discounted occupancy identity gives
+\[
+E_0[V_{\Delta q,r_0,v_0}^\star(S)]
++E_0\!\left[d_0(A,S)
+\{\gamma V_{\Delta q,r_0,v_0}^\star(S')-\Delta q(A,S)\}\right]=0.
+\]
+Subtracting this identity, using Cauchy--Schwarz, and applying the local
+Lipschitz bound for the softmax map yields
+\[
+|R_q|
+\lesssim
+\left\{
+\|d-d_0\|_{\mathcal H,r_0}
++\|r-r_0\|_{\mathcal H,r_0}
++\|v-v_0\|_{\mathcal H,r_0}
 \right\}
-\Biggr).
+\|\Delta q\|_{\mathcal H,r_0}.
 \]
-We have
-\begin{align*}
-E_0\!\left[\sum_{a \in \mathcal{A}^\star} \pi_{r,v^\star}^\star(a \mid S)\, q^\star(a,S)\right]
-- E_0\!\left[\sum_{a \in \mathcal{A}^\star} \pi_{r_0,v_0}^\star(a \mid S)\, q_{r_0,k_0}^\star(a,S)\right]
-&= E_0\!\left[
-   \sum_{a \in \mathcal{A}^\star}
-   \bigl(\pi_{r,v^\star}^\star - \pi_{r_0,v_0}^\star\bigr)(a \mid S)\,
-   q_{r_0,k_0}^\star(a,S)\right] \\
-&\quad + E_0\!\left[
-   \sum_{a \in \mathcal{A}^\star} \pi_{r_0,v_0}^\star(a \mid S)\,
-   \bigl(q^\star(a,S) - q_{r_0,k_0}^\star(a,S)\bigr)\right].
-\end{align*}
-
-
-
-
-
-
-
-\noindent \textbf{Bounding the second term.}
-We begin by deriving a bound for the second term on the right-hand side of the above display. Note that
+By Condition~\ref{cond::stationary3} and
+Lemma~\ref{lemma::invertibility}, the inverse of
+\(\mathcal T_{r_0,k_0}^\star\) is locally bounded, so
 \[
-E_0\!\left[
-    \sum_{a \in \mathcal{A}^\star} 
-        \pi_{r_0,v_0}^\star(a \mid S)\,
-        \bigl(q^\star(a,S) - q_{r_0,k_0}^\star(a,S)\bigr)
-\right]
-= 
-E_0\!\left[
-    V_{0,q^\star}^\star(S) - V_{0,q_{r_0,k_0}^\star}^\star(S)
-\right],
+\|\Delta q\|_{\mathcal H,r_0}
+\lesssim
+\|\mathcal T_{r_0,k_0}^\star\Delta q\|_{\mathcal H,r_0}.
 \]
-where
+This proves the first product in \eqref{eq:softstar-vm-total} that contains the
+Bellman error.
+
+It remains to control \(R_{\mathrm{pol}}\). The identity
 \[
-V_{0,q}^\star(s)
-:= 
-\sum_{a \in \mathcal{A}^\star} 
-    \pi_{r_0,v_0}^\star(a \mid s)\, q(a,s).
-\]
-Applying the proof of Lemma~\ref{lemma::vonmisespolicyvalue} with $\pi := \pi_{r_0,v_0}^\star$ yields
-\begin{align*}
-& E_0\!\Big[
-    \sum_{a \in \mathcal{A}^\star} 
-        \pi_{r_0,v_0}^\star(a \mid S)\,
-        \{ q^\star(a,S) - q_{r_0,k_0}^\star(a,S) \}
-\Big]
-\\[-2pt]
-&\hspace{2.8cm}
-+\;
-E_0\!\Big[\rho^\star(S)\,
-       \tfrac{\pi_{r_0,v_0}^\star}{\pi_r}(A \mid S)\,
-        \bigl\{
-            r_0(A,S)
-            + \gamma\,V_{0,q^\star}^\star(S')
-            - q^\star(A,S)
-        \bigr\}
-\Big]
-\\[6pt]
-&\quad=\;
-E_0\!\Big[
-    \pi_{r_0,v_0}^\star(A \mid S)
-    \bigl\{
-        \rho^\star(S)\,\pi_r(A \mid S)^{-1}
-        - \rho_{r_0,k_0}^\star(S)\,\pi_0(A \mid S)^{-1}
-    \bigr\}
-\\[-2pt]
-&\hspace{4.1cm}\times
-	    \Bigl(
-	        q^\star(A,S)
-	        - q_{r_0,k_0}^\star(A,S)
-	        - \gamma\{
-	            V_{0,q^\star}^\star(S')
-	            - V_{r_0,k_0}^\star(S')
-	        \}
-	    \Bigr)
-	\Big]
-\\[6pt]
-&\quad=\;
-O\!\Big(
-    \bigl\|
-        \rho^\star\,\pi_r^{-1}
-        - \rho_{r_0,k_0}^\star\,\pi_0^{-1}
-    \bigr\|_{\mathcal{H},r_0}\,
-    \bigl\|
-        \mathcal{T}_{r_0,k_0}^\star
-        \bigl(q^\star - q_{r_0,k_0}^\star\bigr)
-    \bigr\|_{\mathcal{H},r_0}
-\Big).
-\end{align*}
-Next,
-\begin{align*}
-& E_0\!\Big[\rho^\star(S)\,
-       \tfrac{\pi_{r_0,v_0}^\star}{\pi_r}(A \mid S)\,
-        \bigl\{
-            r_0(A,S)
-            + \gamma\,V_{0,q^\star}^\star(S')
-            - q^\star(A,S)
-        \bigr\}
-\Big]
-\\
-&\;=\;
-E_0\!\Big[\rho^\star(S)\,
-       \tfrac{\pi_{r,v^\star}^\star}{\pi_r}(A \mid S)\,
-        \bigl\{
-            r_0(A,S)
-            + \gamma\,V_{0,q^\star}^\star(S')
-            - q^\star(A,S)
-        \bigr\}
-\Big]
-\\[-2pt]
-&\hspace{1.2cm}
-+\;
-E_0\!\Big[\rho^\star(S)\,
-       \tfrac{\pi_{r_0,v_0}^\star - \pi_{r,v^\star}^\star}{\pi_r}(A \mid S)\,
-        \bigl\{
-            r_0(A,S)
-            + \gamma\,V_{0,q^\star}^\star(S')
-            - q^\star(A,S)
-        \bigr\}
-\Big]
-\\[6pt]
-&\;=\;
-E_0\!\Big[\rho^\star(S)\,
-       \tfrac{\pi_{r,v^\star}^\star}{\pi_r}(A \mid S)\,
-        \bigl\{
-            r_0(A,S)
-            + \gamma\,V_{0,q^\star}^\star(S')
-            - q^\star(A,S)
-        \bigr\}
-\Big]
-\\[-2pt]
-&\hspace{1.2cm}
-+\;
-O\!\Big(
-    \|Q_{r,v^\star} - Q_{r_0,v_{r_0,k_0}^\star}\|_{\mathcal{H},r_0}\,
-    \bigl\|
-        \mathcal{T}_{r_0,k_0}^\star(q^\star - q_{r_0,k_0}^\star)
-    \bigr\|_{\mathcal{H},r_0}
-\Big).
-\end{align*}
-
-Moreover, by adding and subtracting $r$ and using Lemma~\ref{lemma::vonmisespolicyvalue},
-\begin{align*}
-& E_0\!\Big[\rho^\star(S)\,
-       \tfrac{\pi_{r,v^\star}^\star}{\pi_r}(A \mid S)\,
-        \bigl\{
-            r_0(A,S)
-            + \gamma\,V_{0,q^\star}^\star(S')
-            - q^\star(A,S)
-        \bigr\}
-\Big]
-\\
-&\;=\;
-E_0\!\Big[\rho^\star(S)\,
-       \tfrac{\pi_{r,v^\star}^\star}{\pi_r}(A \mid S)\,
-        \bigl\{
-            r(A,S)
-            + \gamma\,V_{0,q^\star}^\star(S')
-            - q^\star(A,S)
-        \bigr\}
-\Big]
-\\[-2pt]
-&\hspace{1.2cm}
-+\;
-E_0\!\Big[\rho^\star(S)\{r_0(A,S) - r(A,S)\}\Big]
-+
-O\!\bigl(\|r - r_0\|_{\mathcal{H},r_0}^2\bigr).
-\end{align*}
-
-Combining the above results, we obtain
-\begin{align*}
-& E_0\!\Big[
-    \sum_{a \in \mathcal{A}^\star} 
-        \pi_{r_0,v_0}^\star(a \mid S)\,
-        \{ q^\star(a,S) - q_{r_0,k_0}^\star(a,S) \}
-\Big]
-\\[-2pt]
-&\hspace{2.8cm}
-+\;
-E_0\!\Big[
-    \rho^\star(S)\,
-    \tfrac{\pi_{r,v^\star}^\star}{\pi_r}(A \mid S)\,
-    \bigl\{
-        r(A,S)
-        + \gamma\,V_{0,q^\star}^\star(S')
-        - q^\star(A,S)
-    \bigr\}
-\Big]
-\\[-2pt]
-&\hspace{2.8cm}
-+\;
-E_0\!\Big[
-    \rho^\star(S)\,
-    \Bigl\{
-        1 - \tfrac{\pi_{r,v^\star}^\star}{\pi_r}(A \mid S)
-    \Bigr\}
-\Big]
-\;+\;
-O\!\bigl(\|r - r_0\|_{\mathcal{H},r_0}^2\bigr)
-\\[6pt]
-&\quad=\;
-O\!\Big(
-    \bigl\|
-        \rho^\star\,\pi_r^{-1}
-        - \rho_{r_0,k_0}^\star\,\pi_0^{-1}
-    \bigr\|_{\mathcal{H},r_0}\,
-    \bigl\|
-        \mathcal{T}_{r_0,k_0}^\star
-        \bigl(q^\star - q_{r_0,k_0}^\star\bigr)
-    \bigr\|_{\mathcal{H},r_0}
-\Big)
-\;+\;
-O\!\bigl(\|r - r_0\|_{\mathcal{H},r_0}^2\bigr)
-\\[4pt]
-&\qquad\qquad
-+\;
-O\!\Big(
-    \|Q_{r,v^\star} - Q_{r_0,v_{r_0,k_0}^\star}\|_{\mathcal{H},r_0}\,
-    \bigl\|
-        \mathcal{T}_{r_0,k_0}^\star
-        \bigl(q^\star - q_{r_0,k_0}^\star\bigr)
-    \bigr\|_{\mathcal{H},r_0}
-\Big)
-\\[6pt]
-&\quad=\;
-O\!\Big(
-    \Bigl\{
-        \bigl\|\rho^\star - \rho_{r_0,k_0}^\star\bigr\|_{\mathcal{H},r_0}
-        +
-        \bigl\|r - r_0\bigr\|_{\mathcal{H},r_0}
-        +
-        \bigl\|v^\star - v_{r_0,k_0}^\star\bigr\|_{\mathcal{H},r_0}
-    \Bigr\}
-    \bigl\|
-        \mathcal{T}_{r_0,k_0}^\star
-        \bigl(q^\star - q_{r_0,k_0}^\star\bigr)
-    \bigr\|_{\mathcal{H},r_0}
-\Big)
-\;+\;
-O\!\bigl(\|r - r_0\|_{\mathcal{H},r_0}^2\bigr).
-\end{align*}
-
-
-
-
-
-
-
-
-\noindent \textbf{Bounding first term.}
-\begin{align*}
-&\sum_{a \in \mathcal{A}^\star} \bigl(\pi_{r,v^\star}^\star - \pi_{r_0,v_0}^\star\bigr)(a \mid S)\, q_{r_0,k_0}^\star(a,S)\\
-&= \frac{1}{\tau^\star} \sum_{a \in \mathcal{A}^\star} q_{r_0,k_0}^\star(a,S)\,\pi_{r_0,v_0}^\star(a \mid S)
-   \Bigl\{ \bigl(Q_{r,v^\star} - Q_{r_0,v_{r_0,k_0}^\star}\bigr)(a,S)
-           - \sum_{\tilde a \in \mathcal{A}^\star} \pi_{r_0,v_0}^\star(\tilde a \mid S)\,
-             \bigl(Q_{r,v^\star}- Q_{r_0,v_{r_0,k_0}^\star}\bigr)(\tilde a,S)
-   \Bigr\}  \\
-&\qquad +\, O\!\left(\|Q_{r,v^\star}- Q_{r_0,v_{r_0,k_0}^\star}(\cdot, S)\|_2^2\right) \\
-&= \frac{1}{\tau^\star} \sum_{a \in \mathcal{A}^\star} \pi_{r_0,v_0}^\star(a \mid S)
-   \Bigl\{ q_{r_0,k_0}^\star(a,S) - \sum_{\tilde a \in \mathcal{A}^\star} \pi_{r_0,v_0}^\star(\tilde a \mid S)\, q_{r_0,k_0}^\star(\tilde a,S) \Bigr\}
-   \bigl(Q_{r,v^\star} - Q_{r_0,v_{r_0,k_0}^\star}\bigr)(a,S) \\
-&\qquad +\, O\!\left(\|Q_{r,v^\star}(\cdot,S) - Q_{r_0,v_{r_0,k_0}^\star}(\cdot,S)\|^2\right).
-\end{align*}
-Taking expectations, we obtain
-\begin{align*}
-& E_0\!\left[\sum_{a \in \mathcal{A}^\star} \bigl(\pi_{r,v^\star}^\star - \pi_{r_0,v_0}^\star\bigr)(a \mid S)\, q_{r_0,k_0}^\star(a,S)\right]\\
-&= \frac{1}{\tau^\star}\,
-E_0\!\left[\sum_{a \in \mathcal{A}^\star} \pi_{r_0,v_0}^\star(a \mid S)
-   \Bigl\{ q_{r_0,k_0}^\star(a,S) - \sum_{\tilde a \in \mathcal{A}^\star} \pi_{r_0,v_0}^\star(\tilde a \mid S)\, q_{r_0,k_0}^\star(\tilde a,S) \Bigr\}
-   \bigl(Q_{r,v^\star} - Q_{r_0,v_{r_0,k_0}^\star}\bigr)(a,S)\right] \\
-&\qquad +\, O\!\left(\|Q_{r,v^\star} - Q_{r_0,v_{r_0,k_0}^\star}\|^2_{\mathcal{H},r_0}\right).
-\end{align*}
-
-
-
-
-
-Denote
-\[
-F_{k_0}(q)(a,s)
-:= q(a,s) - \gamma \int \tau^\star \log \!\sum_{a' \in \mathcal{A}^\star}
-      \exp\!\left(\frac{q(a',s')}{\tau^\star}\right)
-      k_0(s' \mid a,s)\,\mu(ds').
-\]
-Since \(Q_{r_0,v_{r_0,k_0}^\star}\) solves the soft Bellman equation, \(F_{k_0}(Q_{r_0,v_{r_0,k_0}^\star})=r_0\).
-By Lemma \ref{lemma::bellmansmoothnessfull}, a first-order expansion around \(Q_{r_0,v_{r_0,k_0}^\star}\) yields
-\begin{align*}
-F_{k_0}(Q_{r,v^\star})
-&= F_{k_0}(Q_{r_0,v_{r_0,k_0}^\star})
-  + \mathcal{T}_{r_0,k_0}^\star\!\bigl(Q_{r,v^\star} - Q_{r_0,v_{r_0,k_0}^\star}\bigr)
-  \;+\; \mathrm{Rem}(Q_{r,v^\star}),
-\end{align*}
-where the remainder satisfies
-\[
-\bigl\|\mathrm{Rem}(Q_{r,v^\star})\bigr\|_{L^2(\lambda)}
-= O\!\bigl(\,\|Q_{r,v^\star} - Q_{r_0,v_{r_0,k_0}^\star}\|_{L^2(\lambda)}^{\,2}\bigr).
-\]
-Rearranging terms, we obtain
-\begin{align*}
-Q_{r,v^\star} - Q_{r_0,v_{r_0,k_0}^\star}
-&= (\mathcal{T}_{r_0,k_0}^\star)^{-1}\!\bigl(F_{k_0}(Q_{r,v^\star}) - r_0\bigr)
-  \;+\; \mathrm{Rem}_2(Q_{r,v^\star}),
-\end{align*}
-where
-\[
-\mathrm{Rem}_2(Q_{r,v^\star})
-:= (\mathcal{T}_{r_0,k_0}^\star)^{-1}\mathrm{Rem}(Q_{r,v^\star}),
-\qquad
-\bigl\|\mathrm{Rem}_2(Q_{r,v^\star})\bigr\|_{L^2(\lambda)}
-= O\!\bigl(\,\|Q_{r,v^\star} - Q_{r_0,v_{r_0,k_0}^\star}\|_{L^2(\lambda)}^{\,2}\bigr).
-\]
-By equivalence of the \(L^2(\lambda)\) and \(\|\cdot\|_{\mathcal{H},r_0}\) norms, it follows that
-\[
-\bigl\|\mathrm{Rem}_2(Q_{r,v^\star})\bigr\|_{\mathcal{H},r_0}
-= O\!\bigl(\|Q_{r,v^\star} - Q_{r_0,v_{r_0,k_0}^\star}\|_{\mathcal{H},r_0}^{\,2}\bigr).
-\]
-
-
-We thus have
-\begin{align*}
-E_0\!\Bigg[\sum_{a \in \mathcal{A}^\star} \pi_{r_0,v_0}^\star(a \mid S)
-   \Bigl\{ q_{r_0,k_0}^\star(a,S) - \sum_{\tilde a \in \mathcal{A}^\star} 
-          \pi_{r_0,v_0}^\star(\tilde a \mid S)\, q_{r_0,k_0}^\star(\tilde a,S) \Bigr\}
-   \bigl(Q_{r,v^\star} - Q_{r_0,v_{r_0,k_0}^\star}\bigr)(a,S)\Bigg] \\
-=\;
-E_0\!\Bigg[\sum_{a \in \mathcal{A}^\star} \pi_{r_0,v_0}^\star(a \mid S)
-   \Bigl\{ q_{r_0,k_0}^\star(a,S) - \sum_{\tilde a \in \mathcal{A}^\star} 
-          \pi_{r_0,v_0}^\star(\tilde a \mid S)\, q_{r_0,k_0}^\star(\tilde a,S) \Bigr\}
-   (\mathcal{T}_{r_0,k_0}^\star)^{-1}\!\bigl(F_{k_0}(Q_{r,v^\star}) - r_0\bigr)(a,S)\Bigg] \\
-\quad +\;
-E_0\!\left[\sum_{a \in \mathcal{A}^\star} \pi_{r_0,v_0}^\star(a \mid S)
-   \Bigl\{ q_{r_0,k_0}^\star(a,S) - \sum_{\tilde a \in \mathcal{A}^\star} 
-          \pi_{r_0,v_0}^\star(\tilde a \mid S)\, q_{r_0,k_0}^\star(\tilde a,S) \Bigr\}
-   \mathrm{Rem}_2(Q_{r,v^\star})(a,S)\right].
-\end{align*}
-By Cauchy--Schwarz and boundedness of \(Q_{r,v^\star}\), we have
-\begin{align*}
-&E_0\!\left[\sum_{a \in \mathcal{A}^\star} \pi_{r_0,v_0}^\star(a \mid S)
-   \Bigl\{ q_{r_0,k_0}^\star(a,S) - \sum_{\tilde a \in \mathcal{A}^\star}
-          \pi_{r_0,v_0}^\star(\tilde a \mid S)\, q_{r_0,k_0}^\star(\tilde a,S) \Bigr\}\right. \\
-&\qquad\qquad \left.\times
-   \mathrm{Rem}_2(Q_{r,v^\star})(a,S)\right]
-&\;\le\; \bigl\|\mathrm{Rem}_2(Q_{r,v^\star})\bigr\|_{\mathcal{H},r_0} \\
-&=\; O\!\left(\|Q_{r,v^\star} - Q_{r_0,v_{r_0,k_0}^\star}\|_{\mathcal{H},r_0}^{\,2}\right).
-\end{align*}
-Hence,
-\begin{align*}
-&E_0\!\left[\sum_{a \in \mathcal{A}^\star} \pi_{r_0,v_0}^\star(a \mid S)
-   \Bigl\{ q_{r_0,k_0}^\star(a,S) - \sum_{\tilde a \in \mathcal{A}^\star}
-          \pi_{r_0,v_0}^\star(\tilde a \mid S)\, q_{r_0,k_0}^\star(\tilde a,S) \Bigr\}\right. \\
-&\qquad\qquad \left.\times
-   \bigl(Q_{r,v^\star} - Q_{r_0,v_{r_0,k_0}^\star}\bigr)(a,S)\right] \\
-&\;=\; E_0\!\left[\sum_{a \in \mathcal{A}^\star} \pi_{r_0,v_0}^\star(a \mid S)
-   \Bigl\{ q_{r_0,k_0}^\star(a,S) - \sum_{\tilde a \in \mathcal{A}^\star}
-          \pi_{r_0,v_0}^\star(\tilde a \mid S)\, q_{r_0,k_0}^\star(\tilde a,S) \Bigr\}\right. \\
-&\qquad\qquad \left.\times
-   (\mathcal{T}_{r_0,k_0}^\star)^{-1}\!\bigl(F_{k_0}(Q_{r,v^\star}) - r_0\bigr)(a,S)\right] \\
-&\quad + O\!\left(\|Q_{r,v^\star} - Q_{r_0,v_{r_0,k_0}^\star}\|_{\mathcal{H},r_0}^{\,2}\right).
-\end{align*}
-
-
-
-We now use the identity
-\[
-\bigl((\mathcal{T}_{r_0,k_0}^\star)^{-1}f\bigr)(a,s)
-    = \sum_{a' \in \mathcal{A}^\star} \int 
-        \frac{\pi_{r_0,v_0}^\star(a' \mid s')}{\pi_0(a' \mid s')}
-        \,\rho_{r_0,k_0}^\star(s' \mid a,s)\,
-        f(a',s')\,\mu(ds').
-\]
-Substituting \(f = F_{k_0}(Q_{r,v^\star}) - r_0\) and defining
-\[
-C^\star(a,S) := q_{r_0,k_0}^\star(a,S) - \sum_{\tilde a \in \mathcal{A}^\star} 
-          \pi_{r_0,v_0}^\star(\tilde a \mid S)\, q_{r_0,k_0}^\star(\tilde a,S),
-\]
-we obtain
-\begin{align*}
-&\;E_0\!\left[\sum_{a \in \mathcal{A}^\star} \pi_{r_0,v_0}^\star(a \mid S)\,
-   C^\star(a,S)\;
-   \bigl((\mathcal{T}_{r_0,k_0}^\star)^{-1}(F_{k_0}(Q_{r,v^\star})-r_0)\bigr)(a,S)\right] \\
-&= E_0\!\left[\sum_{a \in \mathcal{A}^\star} \pi_{r_0,v_0}^\star(a \mid S)\, C^\star(a,S)\,
-   \sum_{a' \in \mathcal{A}^\star} \int
-        \frac{\pi_{r_0,v_0}^\star(a' \mid s')}{\pi_0(a' \mid s')}
-        \,\rho_{r_0,k_0}^\star(s' \mid a,S)\right. \notag\\
-&\qquad\qquad \left.\times
-        \bigl(F_{k_0}(Q_{r,v^\star})-r_0\bigr)(a',s')\,
-        \pi_0(a' \mid s')\rho_0(ds')\right].
-\end{align*}
-By Fubini--Tonelli, we may interchange the expectation, sum, and integral:
-\begin{align*}
-&\;= \sum_{a' \in \mathcal{A}^\star} \int
-        \frac{\pi_{r_0,v_0}^\star(a' \mid s')}{\pi_0(a' \mid s')}
-        \,\bigl(F_{k_0}(Q_{r,v^\star})-r_0\bigr)(a',s') \notag\\
-&\qquad\qquad \times
-        E_0\!\left[\sum_{a \in \mathcal{A}^\star} 
-             \pi_{r_0,v_0}^\star(a \mid S)\, C^\star(a,S)\,
-             \rho_{r_0,k_0}^\star(s' \mid a,S)\right]\,
-        \pi_0(a' \mid s') \rho_0(ds').
-\end{align*}
-By the definition of \(\widetilde{\rho}_{r_0,k_0}^\star\) in \eqref{eqn::tilderho}, the inner expectation equals
-\(\widetilde{\rho}_{r_0,k_0}^\star(s')\). Therefore,
-\begin{align*}
-&\;= \sum_{a' \in \mathcal{A}^\star} \int
-        \frac{\pi_{r_0,v_0}^\star(a' \mid s')}{\pi_0(a' \mid s')}
-        \,\widetilde{\rho}_{r_0,k_0}^\star(s')\,
-        \bigl(F_{k_0}(Q_{r,v^\star})-r_0\bigr)(a',s') \,
-        \pi_0(a' \mid s')\rho_0(ds') \\
-&= E_0 \left[
-        \frac{\pi_{r_0,v_0}^\star(A \mid S)}{\pi_0(A \mid S)}\,
-        \widetilde{\rho}_{r_0,k_0}^\star(S)\,
-        \bigl(F_{k_0}(Q_{r,v^\star})-r_0\bigr)(A,S)
-      \right].
-\end{align*}
-
-
-We have now shown that
-\begin{align*}
-&E_0\!\left[\sum_{a \in \mathcal{A}^\star} \pi_{r_0,v_0}^\star(a \mid S)
-   \Bigl\{ q_{r_0,k_0}^\star(a,S) - \sum_{\tilde a \in \mathcal{A}^\star} 
-          \pi_{r_0,v_0}^\star(\tilde a \mid S)\, q_{r_0,k_0}^\star(\tilde a,S) \Bigr\}
-   \bigl(Q_{r,v^\star} - Q_{r_0,v_{r_0,k_0}^\star}\bigr)(a,S)\right] \\
-&\qquad= E_0 \left[
-        \frac{\pi_{r_0,v_0}^\star(A \mid S)}{\pi_0(A \mid S)}\,
-        \widetilde{\rho}_{r_0,k_0}^\star(S)\,
-        \bigl(F_{k_0}(Q_{r,v^\star})-r_0\bigr)(A,S)
-      \right] \\
-&\quad +
-O\!\left(\|Q_{r,v^\star} - Q_{r_0,v_{r_0,k_0}^\star}\|_{\mathcal{H},r_0}^{\,2}\right).
-\end{align*}
-Taking expectations then gives
-\begin{align*}
-&E_0\!\left[\sum_{a \in \mathcal{A}^\star}
-\bigl(\pi_{r,v^\star}^\star - \pi_{r_0,v_0}^\star\bigr)(a \mid S)\,
-q_{r_0,k_0}^\star(a,S)\right]
-&= \frac{1}{\tau^\star}\,
-	    E_0 \left[ 
-	        \frac{\pi_{r_0,v_0}^\star(A \mid S)}{\pi_0(A \mid S)}\,
-	        \widetilde{\rho}_{r_0,k_0}^\star(S)\,
-	        \bigl(F_{k_0}(Q_{r,v^\star})-r_0\bigr)(A,S) \right] \\
-	&\qquad +\;
-	O\!\left(\|Q_{r,v^\star} - Q_{r_0,v_{r_0,k_0}^\star}\|_{\mathcal{H},r_0}^{\,2}\right).
-\end{align*}
-
-Denote $\widetilde{d}_{r,v,\widetilde{\rho}^\star}^\star(a,s) :=  \frac{\pi_{r,v^\star}^\star(a \mid s)}{\pi_r(a \mid s)}
-        \,\widetilde{\rho}^\star(s)$. Next, adding and subtracting, we have
-\begin{align*}
-&\frac{1}{\tau^\star}\,
-E_0 \!\left[
-        \frac{\pi_{r_0,v_0}^\star(A \mid S)}{\pi_0(A \mid S)}\,
-        \widetilde{\rho}_{r_0,k_0}^\star(S)\,
-        \bigl(F_{k_0}(Q_{r,v^\star})-r_0\bigr)(A,S)
-\right]
-\\[6pt]
-&=\frac{1}{\tau^\star}\,
-E_0 \!\left[
-       \bigl\{\widetilde{d}_{r_0,k_0}^\star(A,S) - \widetilde{d}_{r,v,\widetilde{\rho}^\star}^\star(A,S)\bigr\}\,
-        \bigl(F_{k_0}(Q_{r,v^\star})-r_0\bigr)(A,S)
-\right]
-\\
-&\quad + \frac{1}{\tau^\star}\,
-E_0 \!\left[
-      \widetilde{d}_{r,v,\widetilde{\rho}^\star}^\star(A,S)\,
-        \bigl(F_{k_0}(Q_{r,v^\star})-r_0\bigr)(A,S)
-\right].
-\end{align*}
-By Cauchy--Schwarz and the linearization of $F_{k_0}(Q_{r,v^\star})-r_0
-= F_{k_0}(Q_{r,v^\star})-F_{k_0}(Q_{r_0,v_{r_0,k_0}^\star})$ we derived previously,
-we obtain
-\begin{align*}
-    &E_0 \!\left[
-       \bigl\{\widetilde{d}_{r_0,k_0}^\star(A,S) - \widetilde{d}_{r,v,\widetilde{\rho}^\star}^\star(A,S)\bigr\}\,
-        \bigl(F_{k_0}(Q_{r,v^\star})-r_0\bigr)(A,S)
-    \right] \\
-    &\qquad \le\;
-    O\!\left(
-        \bigl\|\widetilde{d}_{r,v,\widetilde{\rho}^\star}^\star - \widetilde{d}_{r_0,k_0}^\star\bigr\|_{\mathcal{H},r_0}\,
-        \bigl\|Q_{r,v^\star} - Q_{r_0,v_{r_0,k_0}^\star}\bigr\|_{\mathcal{H},r_0}
-    \right)
-    \;+\;
-    O\!\left(
-        \bigl\|Q_{r,v^\star} - Q_{r_0,v_{r_0,k_0}^\star}\bigr\|_{\mathcal{H},r_0}^2
-    \right).
-\end{align*}
-
-
-
-Next, add and subtract \(r\) inside the expectation and apply the law of total expectation:
-\begin{align*}
-\frac{1}{\tau^\star}\,
-E_0 \!\left[
-       \widetilde{d}_{r,v,\widetilde{\rho}^\star}^\star(A,S)\,
-       \bigl(F_{k_0}(Q_{r,v^\star})-r_0\bigr)(A,S)
-\right]
-&= \frac{\gamma}{\tau^\star}\,
-E_0 \!\left[
-       \widetilde{d}_{r,v,\widetilde{\rho}^\star}^\star(A,S)\,
-       \bigl(v^\star(A,S) - \Phi_{r,v^\star}^\star(S')\bigr)
-\right] \\
-&\quad + \frac{1}{\tau^\star}\,
-E_0 \!\left[
-       \widetilde{d}_{r,v,\widetilde{\rho}^\star}^\star(A,S)\,
-       \bigl(r - r_0\bigr)(A,S)
-\right].
-\end{align*}
-
-As in the proof of Lemma~\ref{lemma::vonmisespolicyvalue},
-\begin{align*}
-\frac{1}{\tau^\star}\,
-E_0 \!\left[
-        \widetilde{d}_{r,v,\widetilde{\rho}^\star}^\star(A,S)\,
-        \bigl(r - r_0\bigr)(A,S)
-\right]
-&=
-\frac{1}{\tau^\star}\,
-E_0 \!\left[
-        \widetilde{\rho}^\star(S)\,
-        \Bigl(1 - \tfrac{\pi_{r,v^\star}^\star}{\pi_r}\Bigr)(A \mid S)
-\right]
-\;+\;
-O\!\left(\|r - r_0\|_{\mathcal{H},r_0}^{\,2}\right).
-\end{align*}
-Collecting terms, we obtain
-\begin{align*}
-	&E_0\!\left[
-	        \sum_{a \in \mathcal{A}^\star}
-	        \bigl(\pi_{r,v^\star}^\star - \pi_{r_0,v_0}^\star\bigr)(a \mid S)\,
-	        q_{r_0,k_0}^\star(a,S)
-	\right]
-	\\[6pt]
-	&=\;
-	\frac{\gamma}{\tau^\star}\,
-	E_0\!\left[
-	       \widetilde{d}_{r,v,\widetilde{\rho}^\star}^\star(A,S)\,
-	       \Bigl(v^\star(A,S) - \Phi_{r,v^\star}^\star(S')\Bigr)
-	\right]
-\\[4pt]
-&\quad +\;
-\frac{1}{\tau^\star}\,
-E_0\!\left[
-        \widetilde{\rho}^\star(S)\,
-        \Bigl(1 - \tfrac{\pi_{r,v^\star}^\star}{\pi_r}\Bigr)(A \mid S)
-\right]
-\;+\;
-O\!\left(\|r - r_0\|_{\mathcal{H},r_0}^{\,2}\right)
-\;+\;
-O\!\left(\|Q_{r,v^\star} - Q_{r_0,v_{r_0,k_0}^\star}\|_{\mathcal{H},r_0}^{\,2}\right)
-\\[4pt]
-&\quad +\;
-O\!\left(
-        \bigl\|\widetilde{d}_{r,v,\widetilde{\rho}^\star}^\star - \widetilde{d}_{r_0,k_0}^\star\bigr\|_{\mathcal{H},r_0}\,
-        \bigl\|Q_{r,v^\star} - Q_{r_0,v_{r_0,k_0}^\star}\bigr\|_{\mathcal{H},r_0}
-    \right).
-\end{align*}
-We also know
-\[
-\bigl\|\widetilde{d}_{r,v,\widetilde{\rho}^\star}^\star - \widetilde{d}_{r_0,k_0}^\star\bigr\|_{\mathcal{H},r_0}
-= 
-O\!\Bigl(
-    \bigl\|\widetilde{\rho}^\star - \widetilde{\rho}_{r_0,k_0}^\star\bigr\|_{\mathcal{H},r_0}
-    +  
-    \bigl\|Q_{r,v^\star} - Q_{r_0,v_{r_0,k_0}^\star}\bigr\|_{\mathcal{H},r_0}
-\Bigr),
-\]
-and
-\[
-\bigl\|Q_{r,v^\star} - Q_{r_0,v_{r_0,k_0}^\star}\bigr\|_{\mathcal{H},r_0}
+E_0[d(A,S)\{r-r_0\}(A,S)]
++E_0[d(A,S)-\rho_{d,r}(S)]
 =
-O\!\bigl(\|r - r_0\|_{\mathcal{H},r_0} + \|v^\star - v_{r_0,k_0}^\star\|_{\mathcal{H},r_0}\bigr).
+E_0\!\left[d(A,S)
+\{r-r_0+1-\exp(r-r_0)\}(A,S)\right]
 \]
-Hence,
-\begin{align*}
-	&E_0\!\left[
-	        \sum_{a \in \mathcal{A}^\star}
-	        \bigl(\pi_{r,v^\star}^\star - \pi_{r_0,v_0}^\star\bigr)(a \mid S)\,
-	        q_{r_0,k_0}^\star(a,S)
-	\right]
-	\\[6pt]
-	&=\;
-	\frac{\gamma}{\tau^\star}\,
-	E_0\!\left[
-	       \widetilde{d}_{r,v,\widetilde{\rho}^\star}^\star(A,S)\,
-	       \Bigl(v^\star(A,S) - \Phi_{r,v^\star}^\star(S')\Bigr)
-	\right]
-\\[4pt]
-&\quad +\;
-\frac{1}{\tau^\star}\,
-E_0\!\left[
-        \widetilde{\rho}^\star(S)\,
-        \Bigl(1 - \tfrac{\pi_{r,v^\star}^\star}{\pi_r}\Bigr)(A \mid S)
-\right]
-\;+\;
-O\!\left(\|r - r_0\|_{\mathcal{H},r_0}^{\,2}\right)
-\;+\;
-O\!\left(\|v^\star - v_{r_0,k_0}^\star\|_{\mathcal{H},r_0}^{\,2}\right)
-\\[4pt]
-&\quad +\;
+uses \(\pi_r/\pi_0=\exp(r-r_0)\). Taylor's theorem therefore bounds this
+quantity by \(O(\|r-r_0\|_{\mathcal H,r_0}^2)\), uniformly over bounded
+\(d\).
+
+The first-order change of the target softmax satisfies
+\[
+\pi_{r,v}^\star-\pi_0^\star
+=
+\frac{\pi_0^\star}{\tau^\star}
+\left\{\Delta Q-\Pi_{r_0,k_0}^\star\Delta Q\right\}
++O(\|\Delta Q\|_{\mathcal H,r_0}^2).
+\]
+Substitution into the plug-in and ordinary Bellman terms, followed by the
+discounted occupancy identity, gives the first-order policy contribution
+\[
+\frac{1}{\tau^\star}
+E_0[z_{r_0,k_0}^\star(A,S)\Delta Q(A,S)].
+\]
+Replacing \(d_0\) by \(d\) in these terms contributes at most
+\[
 O\!\left(
-       \bigl\|\widetilde{\rho}^\star - \widetilde{\rho}_{r_0,k_0}^\star\bigr\|_{\mathcal{H},r_0}\,
-       \bigl(\|r - r_0\|_{\mathcal{H},r_0} + \|v^\star - v_{r_0,k_0}^\star\|_{\mathcal{H},r_0}\bigr)
-    \right).
-\end{align*}
-Rearranging, we obtain
+\|d-d_0\|_{\mathcal H,r_0}\,
+\|\Delta Q\|_{\mathcal H,r_0}
+\right).
+\]
+The second-order softmax remainder is
+\(O(\|\Delta Q\|_{\mathcal H,r_0}^2)\); this follows from the bounded
+second derivative in Lemma~\ref{lemma::bellmansmoothnessfull}.
+
+For the signed augmentation, Taylor expansion of
+\(\Phi_{r,v}^\star\) and the same log-policy identity give
 \begin{align*}
-	&E_0\!\left[
-	        \sum_{a \in \mathcal{A}^\star}
-	        \bigl(\pi_{r,v^\star}^\star - \pi_{r_0,v_0}^\star\bigr)(a \mid S)\,
-	        q_{r_0,k_0}^\star(a,S)
-	\right]
-	\\[6pt]
-	&+\;
-	\frac{\gamma}{\tau^\star}\,
-	E_0\!\left[
-	       \widetilde{d}_{r,v,\widetilde{\rho}^\star}^\star(A,S)\,
-	       \Bigl(\Phi_{r,v^\star}^\star(S') - v^\star(A,S)\Bigr)
-	\right]
-\\[4pt]
-&\quad +\;
-\frac{1}{\tau^\star}\,
-E_0\!\left[
-        \widetilde{\rho}^\star(S)\,
-        \Bigl(\tfrac{\pi_{r,v^\star}^\star}{\pi_r} - 1\Bigr)(A \mid S)
-\right]
-\\[4pt]
-&\quad =\;
-O\!\left(\|r - r_0\|_{\mathcal{H},r_0}^{\,2}\right)
-\;+\;
-O\!\left(\|v^\star - v_{r_0,k_0}^\star\|_{\mathcal{H},r_0}^{\,2}\right)
-\\[4pt]
-&\quad +\;
+&\frac{1}{\tau^\star}E_0\!\left[
+\widetilde d(A,S)
++\gamma\widetilde d(A,S)\{\Phi_{r,v}^\star(S')-v(A,S)\}
+-\widetilde\rho_{\widetilde d,r}(S)\right]\\
+&\qquad=
+-\frac{1}{\tau^\star}
+E_0\!\left[\widetilde d(A,S)
+\{\mathcal T_{r_0,k_0}^\star\Delta Q\}(A,S)\right]
++O(\|\Delta Q\|_{\mathcal H,r_0}^2).
+\end{align*}
+By the defining adjoint identity \eqref{eqn::identity2},
+\[
+E_0[\widetilde d_0(A,S)
+\{\mathcal T_{r_0,k_0}^\star\Delta Q\}(A,S)]
+=
+E_0[z_{r_0,k_0}^\star(A,S)\Delta Q(A,S)].
+\]
+The two first-order policy terms thus cancel. Cauchy--Schwarz bounds the
+effect of replacing \(\widetilde d_0\) by \(\widetilde d\) by
+\[
 O\!\left(
-       \bigl\|\widetilde{\rho}^\star - \widetilde{\rho}_{r_0,k_0}^\star\bigr\|_{\mathcal{H},r_0}\,
-       \bigl(\|r - r_0\|_{\mathcal{H},r_0} + \|v^\star - v_{r_0,k_0}^\star\|_{\mathcal{H},r_0}\bigr)
-    \right).
-\end{align*}
-
-
-\noindent \textbf{Combining both bounds.}  
-Adding the two bounds together and simplifying the right-hand side, we obtain
-\begin{align*}
-&\;E_0\!\Big[
-    \sum_{a \in \mathcal{A}^\star} 
-        \pi_{r,v^\star}^\star(a \mid S)\,q^\star(a,S) 
-        - 
-        \sum_{a \in \mathcal{A}^\star} 
-        \pi_{r_0,v_0}^\star(a \mid S)\,q_{r_0,k_0}^\star(a,S)
-\Big]
-\\
-&\quad+\;
-E_0\!\Big[
-    \rho^\star(S)\,
-    \tfrac{\pi_{r,v^\star}^\star}{\pi_r}(A \mid S)\,
-    \bigl\{ r(A,S)+\gamma\,V_{0,q^\star}^\star(S')-q^\star(A,S)\bigr\}
-\Big]
-\\
-&\quad+\;
-E_0\!\Big[
-    \rho^\star(S)\,
-    \Bigl\{1-\tfrac{\pi_{r,v^\star}^\star}{\pi_r}(A \mid S)\Bigr\}
-\Big]
-\\
-&\quad+\;
-\frac{\gamma}{\tau^\star}\,
-E_0\!\Big[
-       \widetilde{d}_{r,v,\widetilde{\rho}^\star}^\star(A,S)\,
-       \Bigl(\Phi_{r,v^\star}^\star(S') - v^\star(A,S)\Bigr)
-\Big]
-\\
-&\quad+\;
-\frac{1}{\tau^\star}\,
-E_0\!\Big[
-        \widetilde{\rho}^\star(S)\,
-        \Bigl(\tfrac{\pi_{r,v^\star}^\star}{\pi_r}-1\Bigr)(A \mid S)
-\Big]
-\\[6pt]
-&=\;
-O\!\Big(
-     \|\rho^\star - \rho_{r_0,k_0}^\star\|_{\mathcal{H},r_0}\,
-     \bigl\|\mathcal{T}_{r_0,k_0}^\star(q^\star - q_{r_0,k_0}^\star)\bigr\|_{\mathcal{H},r_0}
-\\
-&\hspace{2.2cm}
-     +\;
-     \bigl(\|r-r_0\|_{\mathcal{H},r_0} + \|v^\star - v_{r_0,k_0}^\star\|_{\mathcal{H},r_0}\bigr)\,
-     \bigl\|\mathcal{T}_{r_0,k_0}^\star(q^\star - q_{r_0,k_0}^\star)\bigr\|_{\mathcal{H},r_0}
-\\
-&\hspace{2.2cm}
-     +\;
-     \|r-r_0\|_{\mathcal{H},r_0}^{2}
-     +\;
-     \|v^\star - v_{r_0,k_0}^\star\|_{\mathcal{H},r_0}^{2}
-     +\;
-     \|\widetilde{\rho}^\star - \widetilde{\rho}_{r_0,k_0}^\star\|_{\mathcal{H},r_0}\,
-     \bigl(\|r-r_0\|_{\mathcal{H},r_0}+\|v^\star - v_{r_0,k_0}^\star\|_{\mathcal{H},r_0}\bigr)
-\Big).
-\end{align*}
-
+\|\widetilde d-\widetilde d_0\|_{\mathcal H,r_0}
+\{\|r-r_0\|_{\mathcal H,r_0}+\|v-v_0\|_{\mathcal H,r_0}\}
+\right).
+\]
+Combining the bounds for \(R_q\) and \(R_{\mathrm{pol}}\) proves
+\eqref{eq:softstar-vm-total}.
 \end{proof}
 
 
@@ -4629,7 +4071,7 @@ Note that $\psi_n = P_n \varphi_n$, where we define the estimated uncentered inf
 := V_n^{\pi, \gamma}(s)  
 \;+\; \rho_n^{\pi,\gamma}(s)\,\frac{\pi(a \mid s)}{\pi_n(a \mid s)}
     \big\{r_n(a, s) + \gamma V_n^{\pi, \gamma}(s') - q_n^{\pi,\gamma}(a, s)\big\}
-\;+\; \rho_n^{\pi,\gamma}(s)\Big\{1 - \tfrac{\pi(a \mid s)}{\pi_n(a \mid s)}\Big\}.
+\;+\; \rho_n^{\pi,\gamma}(s)\Big\{\tfrac{\pi(a \mid s)}{\pi_n(a \mid s)}-1\Big\}.
 \]
 Let $\varphi_0$ denote the true uncentered influence function $\varphi_{r_0, k_0}$. Then
 \begin{align*}
@@ -4702,12 +4144,10 @@ Note that $\psi_n = P_n \varphi_n$, where we define the estimated uncentered inf
 \begin{align*}
 \varphi_n(s',a,s)
 &:= V_n^\star(s) \\
-&\quad + \rho_n^\star(s)\,
-        \frac{\pi_n^\star(a \mid s)}{\pi_n(a \mid s)}
+&\quad + d_n^\star(a,s)
         \bigl\{r_n(a,s) + \gamma\,V_n^\star(s') - q_n^\star(a,s)\bigr\} \\
 &\quad + \frac{\gamma}{\tau^\star}\,
-        \widetilde{\rho}_n^\star(s)\,
-        \frac{\pi_n^\star(a \mid s)}{\pi_n(a \mid s)}
+        \widetilde d_n^\star(a,s)
         \left[
            \tau^\star \log\!\left( 
                 \sum_{\tilde a \in \mathcal{A}^\star} 
@@ -4717,17 +4157,11 @@ Note that $\psi_n = P_n \varphi_n$, where we define the estimated uncentered inf
             \right)
             - v_n^\star(a,s)
         \right] \\
-&\quad 
-    + \left\{
-            \tfrac{1}{\tau^\star}\,\widetilde{\rho}_n^\star(s)
-            + \rho_n^\star(s)
-      \right\}
-      \left\{ 
-            \tfrac{\pi_n^\star(a \mid s)}{\pi_n(a \mid s)} - 1 
-      \right\}.
+&\quad +d_n^\star(a,s)+\frac{1}{\tau^\star}\widetilde d_n^\star(a,s)
+      -\rho_n^\star(s)-\frac{1}{\tau^\star}\widetilde\rho_n^\star(s).
 \end{align*}
 Let $\varphi_0$ denote the true uncentered influence function corresponding to the nuisances 
-$(r_0, v_{r_0,k_0}^\star, q_{r_0,k_0}^\star, \rho_{r_0,k_0}^\star, \widetilde{\rho}_{r_0,k_0}^\star)$, so that $P_0 \varphi_0 = \psi_0$ and $P_0\chi_0 = 0$, where $\chi_0$ is the influence function in Theorem~\ref{theorem::EIFsoftmax}. Then, arguing as in the proof of Theorem \ref{theorem::ALex1},
+$(r_0, v_{r_0,k_0}^\star, q_{r_0,k_0}^\star, d_{r_0,k_0}^\star, \widetilde d_{r_0,k_0}^\star)$, so that $P_0 \varphi_0 = \psi_0$ and $P_0\chi_0 = 0$, where $\chi_0$ is the influence function in Theorem~\ref{theorem::EIFsoftmax}. Then, arguing as in the proof of Theorem \ref{theorem::ALex1},
 \begin{align*}
     \psi_n - \psi_0 = P_n \chi_0 + (P_n - P_0)(\varphi_n - \varphi_0) + \{P_0 \varphi_n - \psi_0\}.
 \end{align*}
@@ -4746,64 +4180,35 @@ Thus
 = P_n \chi_0 + o_p(n^{-1/2}) + \{P_0 \varphi_n - \psi_0\}.
 \]
 
-It remains to control the remainder term $P_0 \varphi_n - \psi_0$.  
-By construction of $\varphi_n$ and $\psi_n$, and using the notation of Lemma~\ref{lemma::vonmises_softstar}, we have
-\[
-P_0 \varphi_n - \psi_0
-=
-E_0\!\Big[
-    \sum_{a \in \mathcal{A}^\star} 
-        \pi_{r_n,v_n^\star}^\star(a \mid S)\,q_n^\star(a,S) 
-        - 
-        \sum_{a \in \mathcal{A}^\star} 
-        \pi_{r_0,k_0}^\star(a \mid S)\,q_{r_0,k_0}^\star(a,S)
-\Big]
-\]
-plus the three augmentation terms appearing in $\varphi_n$ with $(q^\star,r,v^\star,\rho^\star,\widetilde{\rho}^\star)$ replaced by $(q_n^\star,r_n,v_n^\star,\rho_n^\star,\widetilde{\rho}_n^\star)$.  
-Applying Lemma~\ref{lemma::vonmises_softstar} with
-\[
-q^\star = q_n^\star,\quad
-r = r_n,\quad
-v^\star = v_n^\star,\quad
-\rho^\star = \rho_n^\star,\quad
-\widetilde{\rho}^\star = \widetilde{\rho}_n^\star,
-\]
-we obtain
+It remains to control the remainder term $P_0 \varphi_n - \psi_0$.
+By construction, $\varphi_n$ equals
+$\varphi_{r_n,v_n^\star,q_n^\star,d_n^\star,\widetilde d_n^\star}$ from
+Lemma~\ref{lemma::vonmises_softstar}, with
+$\rho_n^\star=\rho_{d_n^\star,r_n}$ and
+$\widetilde\rho_n^\star=\widetilde\rho_{\widetilde d_n^\star,r_n}$.
+Consequently, \eqref{eq:softstar-vm-total} gives
 \begin{align*}
-\{P_0 \varphi_n - \psi_0\}
-&= O\Big(
-     \|\rho_n^\star - \rho_{r_0,k_0}^\star\|_{\mathcal{H},r_0}\,
-     \bigl\|\mathcal{T}_{r_0,k_0}^\star(q_n^\star - q_{r_0,k_0}^\star)\bigr\|_{\mathcal{H},r_0} \\
-&\qquad\qquad
-     +\bigl(\|r_n-r_0\|_{\mathcal{H},r_0}
-            +\|v_n^\star - v_{r_0,k_0}^\star\|_{\mathcal{H},r_0}\bigr)\,
-      \bigl\|\mathcal{T}_{r_0,k_0}^\star(q_n^\star - q_{r_0,k_0}^\star)\bigr\|_{\mathcal{H},r_0} \\
-&\qquad\qquad
-     +\|r_n-r_0\|_{\mathcal{H},r_0}^{2}
-     +\|v_n^\star - v_{r_0,k_0}^\star\|_{\mathcal{H},r_0}^{2} \\
-&\qquad\qquad
-     +\|\widetilde{\rho}_n^\star - \widetilde{\rho}_{r_0,k_0}^\star\|_{\mathcal{H},r_0}\,
-      \bigl(\|r_n-r_0\|_{\mathcal{H},r_0}
-            +\|v_n^\star - v_{r_0,k_0}^\star\|_{\mathcal{H},r_0}\bigr)
-\Big).
+|P_0\varphi_n-\psi_0|
+\lesssim{}&
+\left(
+\|d_n^\star-d_{r_0,k_0}^\star\|_{\mathcal H,r_0}
++\|r_n-r_0\|_{\mathcal H,r_0}
++\|v_n^\star-v_{r_0,k_0}^\star\|_{\mathcal H,r_0}
+\right)\\
+&\quad\times\left(
+\|\mathcal T_{r_0,k_0}^\star(q_n^\star-q_{r_0,k_0}^\star)\|_{\mathcal H,r_0}
++\|r_n-r_0\|_{\mathcal H,r_0}
++\|v_n^\star-v_{r_0,k_0}^\star\|_{\mathcal H,r_0}
+\right)\\
+&+\|\widetilde d_n^\star-\widetilde d_{r_0,k_0}^\star\|_{\mathcal H,r_0}
+\left(
+\|r_n-r_0\|_{\mathcal H,r_0}
++\|v_n^\star-v_{r_0,k_0}^\star\|_{\mathcal H,r_0}
+\right).
 \end{align*}
-
-By Assumption~\ref{assump:rates::softstar}(c), the terms involving 
-$\|\mathcal{T}_{r_0,k_0}^\star(q_n^\star - q_{r_0,k_0}^\star)\|_{\mathcal{H},r_0}$ are $o_p(n^{-1/2})$.  
-By \ref{cond::rates}\ref{cond::reward} and 
-Assumption~\ref{assump:rates::softstar}(a), we have
-\[
-\|r_n-r_0\|_{\mathcal{H},r_0}^{2} = o_p(n^{-1/2}),
-\qquad
-\|v_n^\star - v_{r_0,k_0}^\star\|_{\mathcal{H},r_0}^{2} = o_p(n^{-1/2}).
-\]
-Finally, by Assumption~\ref{assump:rates::softstar}(b),
-\[
-\|\widetilde{\rho}_n^\star - \widetilde{\rho}_{r_0,k_0}^\star\|_{\mathcal{H},r_0}\,
-\bigl(\|r_n-r_0\|_{\mathcal{H},r_0}
-      +\|v_n^\star - v_{r_0,k_0}^\star\|_{\mathcal{H},r_0}\bigr)
-= o_p(n^{-1/2}).
-\]
+The first product is $o_p(n^{-1/2})$ by
+Assumption~\ref{assump:rates::softstar}(c), and the second is
+$o_p(n^{-1/2})$ by Assumption~\ref{assump:rates::softstar}(b).
 Hence $\{P_0 \varphi_n - \psi_0\} = o_p(n^{-1/2})$, and therefore
 \[
 \psi_n - \psi_0

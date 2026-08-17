@@ -1,0 +1,46 @@
+{
+  "candidates": [
+    {
+      "candidate_id": "h64x64_lr0.001_wd0.001_k10",
+      "hidden_dims": [
+        64,
+        64
+      ],
+      "learning_rate": 0.001,
+      "num_iterations": 10,
+      "weight_decay": 0.001
+    },
+    {
+      "candidate_id": "h64x64_lr0.001_wd0.001_k30",
+      "hidden_dims": [
+        64,
+        64
+      ],
+      "learning_rate": 0.001,
+      "num_iterations": 30,
+      "weight_decay": 0.001
+    },
+    {
+      "candidate_id": "h64x64_lr0.001_wd0.001_k100",
+      "hidden_dims": [
+        64,
+        64
+      ],
+      "learning_rate": 0.001,
+      "num_iterations": 100,
+      "weight_decay": 0.001
+    }
+  ],
+  "exact_validation_action_summation": true,
+  "fit_options": {
+    "batch_size": 512,
+    "device": "cpu",
+    "grad_clip_norm": 10.0,
+    "logit_clip": 10.0,
+    "optimizer_steps": 5,
+    "target_action_draws": 4
+  },
+  "selector": "adversarial-pairwise-bellman-validation",
+  "uses_oracle_truth": false,
+  "validation_empirical_terms": "same-held-out-rows"
+}

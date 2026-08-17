@@ -1,0 +1,276 @@
+{
+  "candidates": [
+    {
+      "candidate_id": "h64x64_lr0.0003_wd0.001_k10",
+      "hidden_dims": [
+        64,
+        64
+      ],
+      "learning_rate": 0.0003,
+      "num_iterations": 10,
+      "weight_decay": 0.001
+    },
+    {
+      "candidate_id": "h64x64_lr0.0003_wd0.001_k30",
+      "hidden_dims": [
+        64,
+        64
+      ],
+      "learning_rate": 0.0003,
+      "num_iterations": 30,
+      "weight_decay": 0.001
+    },
+    {
+      "candidate_id": "h64x64_lr0.0003_wd0.001_k100",
+      "hidden_dims": [
+        64,
+        64
+      ],
+      "learning_rate": 0.0003,
+      "num_iterations": 100,
+      "weight_decay": 0.001
+    },
+    {
+      "candidate_id": "h64x64_lr0.0003_wd0.01_k10",
+      "hidden_dims": [
+        64,
+        64
+      ],
+      "learning_rate": 0.0003,
+      "num_iterations": 10,
+      "weight_decay": 0.01
+    },
+    {
+      "candidate_id": "h64x64_lr0.0003_wd0.01_k30",
+      "hidden_dims": [
+        64,
+        64
+      ],
+      "learning_rate": 0.0003,
+      "num_iterations": 30,
+      "weight_decay": 0.01
+    },
+    {
+      "candidate_id": "h64x64_lr0.0003_wd0.01_k100",
+      "hidden_dims": [
+        64,
+        64
+      ],
+      "learning_rate": 0.0003,
+      "num_iterations": 100,
+      "weight_decay": 0.01
+    },
+    {
+      "candidate_id": "h64x64_lr0.001_wd0.001_k10",
+      "hidden_dims": [
+        64,
+        64
+      ],
+      "learning_rate": 0.001,
+      "num_iterations": 10,
+      "weight_decay": 0.001
+    },
+    {
+      "candidate_id": "h64x64_lr0.001_wd0.001_k30",
+      "hidden_dims": [
+        64,
+        64
+      ],
+      "learning_rate": 0.001,
+      "num_iterations": 30,
+      "weight_decay": 0.001
+    },
+    {
+      "candidate_id": "h64x64_lr0.001_wd0.001_k100",
+      "hidden_dims": [
+        64,
+        64
+      ],
+      "learning_rate": 0.001,
+      "num_iterations": 100,
+      "weight_decay": 0.001
+    },
+    {
+      "candidate_id": "h64x64_lr0.001_wd0.01_k10",
+      "hidden_dims": [
+        64,
+        64
+      ],
+      "learning_rate": 0.001,
+      "num_iterations": 10,
+      "weight_decay": 0.01
+    },
+    {
+      "candidate_id": "h64x64_lr0.001_wd0.01_k30",
+      "hidden_dims": [
+        64,
+        64
+      ],
+      "learning_rate": 0.001,
+      "num_iterations": 30,
+      "weight_decay": 0.01
+    },
+    {
+      "candidate_id": "h64x64_lr0.001_wd0.01_k100",
+      "hidden_dims": [
+        64,
+        64
+      ],
+      "learning_rate": 0.001,
+      "num_iterations": 100,
+      "weight_decay": 0.01
+    },
+    {
+      "candidate_id": "h128x128_lr0.0003_wd0.001_k10",
+      "hidden_dims": [
+        128,
+        128
+      ],
+      "learning_rate": 0.0003,
+      "num_iterations": 10,
+      "weight_decay": 0.001
+    },
+    {
+      "candidate_id": "h128x128_lr0.0003_wd0.001_k30",
+      "hidden_dims": [
+        128,
+        128
+      ],
+      "learning_rate": 0.0003,
+      "num_iterations": 30,
+      "weight_decay": 0.001
+    },
+    {
+      "candidate_id": "h128x128_lr0.0003_wd0.001_k100",
+      "hidden_dims": [
+        128,
+        128
+      ],
+      "learning_rate": 0.0003,
+      "num_iterations": 100,
+      "weight_decay": 0.001
+    },
+    {
+      "candidate_id": "h128x128_lr0.0003_wd0.01_k10",
+      "hidden_dims": [
+        128,
+        128
+      ],
+      "learning_rate": 0.0003,
+      "num_iterations": 10,
+      "weight_decay": 0.01
+    },
+    {
+      "candidate_id": "h128x128_lr0.0003_wd0.01_k30",
+      "hidden_dims": [
+        128,
+        128
+      ],
+      "learning_rate": 0.0003,
+      "num_iterations": 30,
+      "weight_decay": 0.01
+    },
+    {
+      "candidate_id": "h128x128_lr0.0003_wd0.01_k100",
+      "hidden_dims": [
+        128,
+        128
+      ],
+      "learning_rate": 0.0003,
+      "num_iterations": 100,
+      "weight_decay": 0.01
+    },
+    {
+      "candidate_id": "h128x128_lr0.001_wd0.001_k10",
+      "hidden_dims": [
+        128,
+        128
+      ],
+      "learning_rate": 0.001,
+      "num_iterations": 10,
+      "weight_decay": 0.001
+    },
+    {
+      "candidate_id": "h128x128_lr0.001_wd0.001_k30",
+      "hidden_dims": [
+        128,
+        128
+      ],
+      "learning_rate": 0.001,
+      "num_iterations": 30,
+      "weight_decay": 0.001
+    },
+    {
+      "candidate_id": "h128x128_lr0.001_wd0.001_k100",
+      "hidden_dims": [
+        128,
+        128
+      ],
+      "learning_rate": 0.001,
+      "num_iterations": 100,
+      "weight_decay": 0.001
+    },
+    {
+      "candidate_id": "h128x128_lr0.001_wd0.01_k10",
+      "hidden_dims": [
+        128,
+        128
+      ],
+      "learning_rate": 0.001,
+      "num_iterations": 10,
+      "weight_decay": 0.01
+    },
+    {
+      "candidate_id": "h128x128_lr0.001_wd0.01_k30",
+      "hidden_dims": [
+        128,
+        128
+      ],
+      "learning_rate": 0.001,
+      "num_iterations": 30,
+      "weight_decay": 0.01
+    },
+    {
+      "candidate_id": "h128x128_lr0.001_wd0.01_k100",
+      "hidden_dims": [
+        128,
+        128
+      ],
+      "learning_rate": 0.001,
+      "num_iterations": 100,
+      "weight_decay": 0.01
+    }
+  ],
+  "exact_validation_action_summation": true,
+  "fit_options": {
+    "batch_size": 512,
+    "device": "cpu",
+    "grad_clip_norm": 10.0,
+    "logit_clip": 10.0,
+    "optimizer_steps": 5,
+    "target_action_draws": 4
+  },
+  "protocol": {
+    "exact_validation_action_summation": true,
+    "examples": [
+      "1a",
+      "1b"
+    ],
+    "fit_validation_signed_split": [
+      0.6,
+      0.2,
+      0.2
+    ],
+    "outer_folds": 2,
+    "repetitions": 10,
+    "resumable_cell_directory": "/Users/larsvanderlaan/repos/RLtools/submissions/irl/experiments/journal_debiased_irl/artifacts/fore_selection_pilot/cells/b636f71c58915e90",
+    "sample_sizes": [
+      2500,
+      10000
+    ],
+    "validation_empirical_terms": "same-held-out-rows"
+  },
+  "selector": "adversarial-pairwise-bellman-validation",
+  "uses_oracle_truth": false,
+  "validation_empirical_terms": "same-held-out-rows"
+}
